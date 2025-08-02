@@ -63,7 +63,7 @@ def setup_logging():
     # File handler
     file_handler = logging.FileHandler('bot.log', encoding='utf-8')
     file_handler.setFormatter(formatter)
-    file_handler.setLevel(logging.INFO)
+    file_handler.setLevel(logging.WARNING)  # Only warnings and errors
     
     # Console handler (minimal output)
     console_handler = logging.StreamHandler()
@@ -72,7 +72,7 @@ def setup_logging():
     
     # Setup root logger
     logging.basicConfig(
-        level=logging.INFO,
+        level=logging.WARNING,
         handlers=[file_handler, console_handler]
     )
     

@@ -3,210 +3,371 @@ import os
 import json
 import logging
 from datetime import datetime, timedelta
-from typing import Dict, Optional
+from typing import Dict, Optional, Tuple, List
+import time
+from functools import lru_cache
 
-# Cache for Calendly bookings to reduce API calls
-_booking_cache = {}
-_cache_duration = timedelta(minutes=5)  # Cache for 5 minutes
+# Production Configuration
+CALENDLY_TOKEN = os.getenv('CALENDLY_TOKEN')
+CALENDLY_USER_URI = os.getenv('CALENDLY_USER_URI')
 
-def _is_cache_valid(cache_time: datetime) -> bool:
-    """Check if cache entry is still valid"""
-    return datetime.now() - cache_time < _cache_duration
 
-def check_email_booked(email_to_check: str, user_uuid: Optional[str] = None, token: Optional[str] = None) -> bool:
-    """
-    Check if an email has booked a call in Calendly with caching
+
+# Event UUIDs for specific call types
+MASTERMIND_EVENT_UUID = "b14efb6e-2e2c-403c-a883-fc27b95ef6ee"  # Mastermind Onboarding Roadmap Call
+GAMEPLAN_EVENT_UUID = "fd175687-be69-45f1-964b-52478d350ebb"  # Profitability Game Plan Call
+
+# API Configuration
+REQUEST_TIMEOUT = 30  # Increased timeout
+MAX_RETRIES = 5  # More retries
+CACHE_DURATION = 600  # 10 minutes cache
+
+# Global cache for API responses
+_api_cache = {}
+_cache_timestamps = {}
+
+class CalendlyAPIError(Exception):
+    """Custom exception for Calendly API errors"""
+    pass
+
+class CalendlyBookingChecker:
+    """Production-level Calendly booking checker"""
     
-    Args:
-        email_to_check (str): Email address to check
-        user_uuid (str): Calendly user UUID (optional, will use env var if not provided)
-        token (str): Calendly API token (optional, will use env var if not provided)
-    
-    Returns:
-        bool: True if booking found, False otherwise
-    """
-    # Normalize email for cache key
-    email_key = email_to_check.lower().strip()
-    
-    # Check cache first
-    if email_key in _booking_cache:
-        cache_entry = _booking_cache[email_key]
-        if _is_cache_valid(cache_entry['timestamp']):
-            logging.info(f"Using cached result for {email_to_check}: {cache_entry['result']}")
-            return cache_entry['result']
-        else:
-            # Remove expired cache entry
-            del _booking_cache[email_key]
-    
-    # Get credentials from environment variables if not provided
-    if not user_uuid:
-        user_uuid = os.getenv('CALENDLY_USER_UUID', '2ae4f947-d7f5-4610-93cf-fc67ff729342')
-    if not token:
-        token = os.getenv('CALENDLY_TOKEN', 'eyJraWQiOiIxY2UxZTEzNjE3ZGNmNzY2YjNjZWJjY2Y4ZGM1YmFmYThhNjVlNjg0MDIzZjdjMzJiZTgzNDliMjM4MDEzNWI0IiwidHlwIjoiUEFUIiwiYWxnIjoiRVMyNTYifQ.eyJpc3MiOiJodHRwczovL2F1dGguY2FsZW5kbHkuY29tIiwiaWF0IjoxNzUyNzY4MDI1LCJqdGkiOiIyY2Q4MjQ5OS0wNmI3LTRjM2QtYmI3MS01MDMxZWFkZTRiYjYiLCJ1c2VyX3V1aWQiOiIyYWU0Zjk0Ny1kN2Y1LTQ2MTAtOTNjZi1mYzY3ZmY3MjkzNDIifQ.-Ff2-NjGkvV6f9eSEbMT6qoRDIlactRzPFGa9r8ooW3AmYHZvMCxpSd4apwZodBx45HBMshq98Bt0f8tv6cVbQ')
-    
-    if not user_uuid or not token:
-        logging.error("Missing Calendly credentials")
-        return False
-    
-    try:
-        # 1. Get all scheduled events for the user
-        events_url = "https://api.calendly.com/scheduled_events"
-        user_url = f"https://api.calendly.com/users/{user_uuid}"
-        headers = {
-            "Authorization": f"Bearer {token}",
-            "Content-Type": "application/json"
-        }
-        params = {
-            "user": user_url,
-            "count": 100,  # max per page
-            "status": "active"  # Only check active events
-        }
+    def __init__(self):
+        self.session = requests.Session()
+        self.session.headers.update({
+            'Authorization': f'Bearer {CALENDLY_TOKEN}',
+            'Content-Type': 'application/json',
+            'User-Agent': 'AJ-Trading-Bot/1.0'
+        })
         
-        response = requests.get(events_url, headers=headers, params=params, timeout=5)  # Reduced timeout
-        if response.status_code != 200:
-            logging.error(f"Error fetching events: {response.status_code} - {response.text}")
+        if not CALENDLY_TOKEN:
+            raise CalendlyAPIError("CALENDLY_TOKEN environment variable is required")
+    
+    def _make_request(self, url: str, params: Dict = None) -> Optional[Dict]:
+        """Make a robust API request with retries and error handling - NO RATE LIMITING"""
+        cache_key = f"{url}:{json.dumps(params) if params else '{}'}"
+        
+        # Check cache first
+        if cache_key in _api_cache:
+            if time.time() - _cache_timestamps.get(cache_key, 0) < CACHE_DURATION:
+                return _api_cache[cache_key]
+        
+        for attempt in range(MAX_RETRIES):
+            try:
+                response = self.session.get(
+                    url, 
+                    params=params, 
+                    timeout=REQUEST_TIMEOUT
+                )
+                
+                if response.status_code == 200:
+                    data = response.json()
+                    # Cache successful response
+                    _api_cache[cache_key] = data
+                    _cache_timestamps[cache_key] = time.time()
+                    return data
+                
+                elif response.status_code == 401:
+                    raise CalendlyAPIError("Invalid Calendly token")
+                elif response.status_code == 403:
+                    raise CalendlyAPIError("Insufficient permissions for Calendly API")
+                elif response.status_code == 429:
+                    # Rate limit hit - just retry immediately without waiting
+                    if attempt < MAX_RETRIES - 1:
+                        continue
+                    else:
+                        raise CalendlyAPIError("Rate limit exceeded after all retries")
+                else:
+                    error_msg = f"API request failed: {response.status_code}"
+                    try:
+                        error_data = response.json()
+                        if 'message' in error_data:
+                            error_msg += f" - {error_data['message']}"
+                        if 'title' in error_data:
+                            error_msg += f" ({error_data['title']})"
+                    except:
+                        pass
+                    raise CalendlyAPIError(error_msg)
+                    
+            except requests.exceptions.Timeout:
+                if attempt < MAX_RETRIES - 1:
+                    continue
+                else:
+                    raise CalendlyAPIError("Request timeout")
+            except requests.exceptions.RequestException as e:
+                if attempt < MAX_RETRIES - 1:
+                    continue
+                else:
+                    raise CalendlyAPIError(f"Request failed: {str(e)}")
+        
+        return None
+    
+    def get_user_info(self) -> Optional[Dict]:
+        """Get current user information"""
+        return self._make_request("https://api.calendly.com/users/me")
+    
+    def get_scheduled_events(self, user_uri: str = None, count: int = 100) -> Optional[Dict]:
+        """Get scheduled events for a user - NO LIMITS"""
+        if not user_uri:
+            user_uri = CALENDLY_USER_URI or self._get_user_uri()
+        
+        params = {
+            "user": user_uri,
+            "count": min(count, 100),  # Calendly max is 100
+            "status": "active"
+        }
+        return self._make_request("https://api.calendly.com/scheduled_events", params)
+    
+    def get_event_invitees(self, event_uuid: str) -> Optional[Dict]:
+        """Get invitees for a specific event"""
+        return self._make_request(f"https://api.calendly.com/scheduled_events/{event_uuid}/invitees")
+    
+    def _get_user_uri(self) -> str:
+        """Get user URI from API or environment"""
+        # Get the user URI from the API (the one the token has access to)
+        user_info = self.get_user_info()
+        if user_info and 'resource' in user_info:
+            user_uri = user_info['resource'].get('uri', CALENDLY_USER_URI)
+            return user_uri
+        return CALENDLY_USER_URI
+    
+    def check_email_booking(self, email: str) -> Tuple[bool, Optional[str]]:
+        """
+        Check if an email has booked either Mastermind or Game Plan call
+        
+        Args:
+            email (str): Email address to check
+            
+        Returns:
+            Tuple[bool, Optional[str]]: (has_booked, event_type)
+                - has_booked: True if booking found in either event
+                - event_type: "mastermind", "gameplan", or None
+        """
+        if not email or '@' not in email:
+            logging.error(f"Invalid email: {email}")
+            return False, None
+        
+        email = email.lower().strip()
+        
+        try:
+            # Get user URI
+            user_uri = self._get_user_uri()
+            if not user_uri:
+                logging.error("No user URI available")
+                return False, None
+            
+            # Get scheduled events (max 100 per request)
+            events_data = self.get_scheduled_events(user_uri, count=100)
+            if not events_data:
+                logging.error("Failed to get scheduled events")
+                return False, None
+            
+            events = events_data.get("collection", [])
+            
+            # Check each event for the email
+            for event in events:
+                event_uuid = event.get("uri", "").split("/")[-1]
+                event_type_uri = event.get('event_type', '')
+                event_type_uuid = event_type_uri.split('/')[-1] if '/' in event_type_uri else ''
+                
+                if not event_uuid:
+                    continue
+                
+                # Only check our specific events
+                if event_type_uuid not in [MASTERMIND_EVENT_UUID, GAMEPLAN_EVENT_UUID]:
+                    continue
+                
+                # Get invitees for this event
+                invitees_data = self.get_event_invitees(event_uuid)
+                if not invitees_data:
+                    continue
+                
+                invitees = invitees_data.get("collection", [])
+                
+                # Check if email matches any invitee
+                for invitee in invitees:
+                    invitee_email = invitee.get("email", "").lower()
+                    status = invitee.get("status", "unknown")
+                    
+                    if invitee_email == email and status == "active":
+                        # Determine event type
+                        event_type = None
+                        if event_type_uuid == MASTERMIND_EVENT_UUID:
+                            event_type = "mastermind"
+                        elif event_type_uuid == GAMEPLAN_EVENT_UUID:
+                            event_type = "gameplan"
+                        
+                        if event_type:
+                            return True, event_type
+            
+            return False, None
+            
+        except CalendlyAPIError as e:
+            logging.error(f"Calendly API error: {e}")
+            return False, None
+        except Exception as e:
+            logging.error(f"Unexpected error checking booking for {email}: {e}")
+            return False, None
+    
+    def get_booking_details(self, email: str) -> Optional[Dict]:
+        """
+        Get detailed booking information for an email
+        
+        Args:
+            email (str): Email address to check
+            
+        Returns:
+            Dict with booking details or None if not found
+        """
+        if not email or '@' not in email:
+            return None
+        
+        email = email.lower().strip()
+        
+        try:
+            user_uri = self._get_user_uri()
+            if not user_uri:
+                return None
+            
+            events_data = self.get_scheduled_events(user_uri, count=50)
+            if not events_data:
+                return None
+            
+            events = events_data.get("collection", [])
+            
+            for event in events:
+                event_uuid = event.get("uri", "").split("/")[-1]
+                event_type_uri = event.get('event_type', '')
+                event_type_uuid = event_type_uri.split('/')[-1] if '/' in event_type_uri else ''
+                
+                invitees_data = self.get_event_invitees(event_uuid)
+                if not invitees_data:
+                    continue
+                
+                invitees = invitees_data.get("collection", [])
+                
+                for invitee in invitees:
+                    invitee_email = invitee.get("email", "").lower()
+                    status = invitee.get("status", "unknown")
+                    
+                    if invitee_email == email and status == "active":
+                        # Determine event type
+                        event_type = None
+                        if event_type_uuid == MASTERMIND_EVENT_UUID:
+                            event_type = "mastermind"
+                        elif event_type_uuid == GAMEPLAN_EVENT_UUID:
+                            event_type = "gameplan"
+                        
+                        return {
+                            'email': email,
+                            'event_uuid': event_uuid,
+                            'event_type': event_type,
+                            'event_type_uuid': event_type_uuid,
+                            'status': status,
+                            'event_name': event.get('name', 'Unknown'),
+                            'start_time': event.get('start_time'),
+                            'end_time': event.get('end_time'),
+                            'invitee_name': invitee.get('name', 'Unknown'),
+                            'invitee_uri': invitee.get('uri')
+                        }
+            
+            return None
+            
+        except Exception as e:
+            logging.error(f"Error getting booking details for {email}: {e}")
+            return None
+    
+    def test_connection(self) -> bool:
+        """Test Calendly API connection"""
+        try:
+            user_info = self.get_user_info()
+            if user_info and 'resource' in user_info:
+                user_name = user_info['resource'].get('name', 'Unknown')
+                logging.info(f"✅ Calendly connection successful - User: {user_name}")
+                return True
+            else:
+                logging.error("❌ Failed to get user info")
+                return False
+        except Exception as e:
+            logging.error(f"❌ Calendly connection failed: {e}")
             return False
 
-        events = response.json().get("collection", [])
-        logging.info(f"Found {len(events)} active events to check for email: {email_to_check}")
+# Global instance
+_calendly_checker = None
+
+def get_calendly_checker() -> CalendlyBookingChecker:
+    """Get or create the global Calendly checker instance"""
+    global _calendly_checker
+    if _calendly_checker is None:
+        _calendly_checker = CalendlyBookingChecker()
+    return _calendly_checker
+
+def check_email_booked(email: str) -> Tuple[bool, Optional[str]]:
+    """
+    Check if an email has booked a call (main function)
+    
+    Args:
+        email (str): Email address to check
         
-        # Limit to recent events to speed up checking
-        recent_events = events[:10]  # Only check last 10 events
+    Returns:
+        Tuple[bool, Optional[str]]: (has_booked, event_type)
+    """
+    checker = get_calendly_checker()
+    return checker.check_email_booking(email)
+
+def get_booking_details(email: str) -> Optional[Dict]:
+    """
+    Get detailed booking information for an email
+    
+    Args:
+        email (str): Email address to check
         
-        for event in recent_events:
-            event_uuid = event["uri"].split("/")[-1]
-            # 2. For each event, get invitees
-            invitees_url = f"https://api.calendly.com/scheduled_events/{event_uuid}/invitees"
-            invitees_resp = requests.get(invitees_url, headers=headers, timeout=5)  # Reduced timeout
-            if invitees_resp.status_code != 200:
-                logging.warning(f"Error fetching invitees for event {event_uuid}: {invitees_resp.status_code}")
-                continue
-                
-            invitees = invitees_resp.json().get("collection", [])
-            for invitee in invitees:
-                invitee_email = invitee.get("email", "").lower()
-                if invitee_email == email_key:
-                    logging.info(f"Found booking for {email_to_check} in event {event_uuid}")
-                    # Cache the positive result
-                    _booking_cache[email_key] = {
-                        'result': True,
-                        'timestamp': datetime.now()
-                    }
-                    return True
-                    
-        logging.info(f"No booking found for {email_to_check}")
-        # Cache the negative result
-        _booking_cache[email_key] = {
-            'result': False,
-            'timestamp': datetime.now()
-        }
-        return False
-        
-    except requests.exceptions.Timeout:
-        logging.error(f"Timeout checking Calendly booking for {email_to_check}")
-        return False
-    except requests.exceptions.RequestException as e:
-        logging.error(f"Request error checking Calendly booking for {email_to_check}: {e}")
-        return False
-    except Exception as e:
-        logging.error(f"Unexpected error checking Calendly booking for {email_to_check}: {e}")
-        return False
+    Returns:
+        Dict with booking details or None if not found
+    """
+    checker = get_calendly_checker()
+    return checker.get_booking_details(email)
 
-def clear_booking_cache():
-    """Clear the booking cache"""
-    global _booking_cache
-    _booking_cache.clear()
-    logging.info("Calendly booking cache cleared")
+def test_calendly_connection() -> bool:
+    """Test Calendly API connection"""
+    checker = get_calendly_checker()
+    return checker.test_connection()
 
-def get_cache_stats():
-    """Get cache statistics"""
-    valid_entries = sum(1 for entry in _booking_cache.values() if _is_cache_valid(entry['timestamp']))
-    total_entries = len(_booking_cache)
-    return {
-        'total_entries': total_entries,
-        'valid_entries': valid_entries,
-        'expired_entries': total_entries - valid_entries
-    }
+def clear_cache():
+    """Clear API cache"""
+    global _api_cache, _cache_timestamps
+    _api_cache.clear()
+    _cache_timestamps.clear()
+    logging.info("Calendly API cache cleared")
 
-def calendly_get_user_info(user_uuid=None, token=None):
-    """Get Calendly user information"""
-    if not user_uuid:
-        user_uuid = os.getenv('CALENDLY_USER_UUID', '2ae4f947-d7f5-4610-93cf-fc67ff729342')
-    if not token:
-        token = os.getenv('CALENDLY_TOKEN', 'eyJraWQiOiIxY2UxZTEzNjE3ZGNmNzY2YjNjZWJjY2Y4ZGM1YmFmYThhNjVlNjg0MDIzZjdjMzJiZTgzNDliMjM4MDEzNWI0IiwidHlwIjoiUEFUIiwiYWxnIjoiRVMyNTYifQ.eyJpc3MiOiJodHRwczovL2F1dGguY2FsZW5kbHkuY29tIiwiaWF0IjoxNzUyNzY4MDI1LCJqdGkiOiIyY2Q4MjQ5OS0wNmI3LTRjM2QtYmI3MS01MDMxZWFkZTRiYjYiLCJ1c2VyX3V1aWQiOiIyYWU0Zjk0Ny1kN2Y1LTQ2MTAtOTNjZi1mYzY3ZmY3MjkzNDIifQ.-Ff2-NjGkvV6f9eSEbMT6qoRDIlactRzPFGa9r8ooW3AmYHZvMCxpSd4apwZodBx45HBMshq98Bt0f8tv6cVbQ')
-    
-    url = "https://api.calendly.com/users/me"
-    headers = {
-        "Content-Type": "application/json",
-        "Authorization": f"Bearer {token}"
-    }
-    
-    try:
-        response = requests.get(url, headers=headers, timeout=5)  # Reduced timeout
-        if response.status_code == 200:
-            return response.json()
-        else:
-            logging.error(f"Error getting user info: {response.status_code} - {response.text}")
-            return None
-    except Exception as e:
-        logging.error(f"Error getting Calendly user info: {e}")
-        return None
-
-def calendly_get_event_types(user_uuid=None, token=None):
-    """Get Calendly event types"""
-    if not user_uuid:
-        user_uuid = os.getenv('CALENDLY_USER_UUID', '2ae4f947-d7f5-4610-93cf-fc67ff729342')
-    if not token:
-        token = os.getenv('CALENDLY_TOKEN', 'eyJraWQiOiIxY2UxZTEzNjE3ZGNmNzY2YjNjZWJjY2Y4ZGM1YmFmYThhNjVlNjg0MDIzZjdjMzJiZTgzNDliMjM4MDEzNWI0IiwidHlwIjoiUEFUIiwiYWxnIjoiRVMyNTYifQ.eyJpc3MiOiJodHRwczovL2F1dGguY2FsZW5kbHkuY29tIiwiaWF0IjoxNzUyNzY4MDI1LCJqdGkiOiIyY2Q4MjQ5OS0wNmI3LTRjM2QtYmI3MS01MDMxZWFkZTRiYjYiLCJ1c2VyX3V1aWQiOiIyYWU0Zjk0Ny1kN2Y1LTQ2MTAtOTNjZi1mYzY3ZmY3MjkzNDIifQ.-Ff2-NjGkvV6f9eSEbMT6qoRDIlactRzPFGa9r8ooW3AmYHZvMCxpSd4apwZodBx45HBMshq98Bt0f8tv6cVbQ')
-    
-    url = "https://api.calendly.com/event_types"
-    user_url = f"https://api.calendly.com/users/{user_uuid}"
-    params = {"user": user_url}
-    headers = {
-        "Content-Type": "application/json",
-        "Authorization": f"Bearer {token}"
-    }
-    
-    try:
-        response = requests.get(url, headers=headers, params=params, timeout=5)  # Reduced timeout
-        if response.status_code == 200:
-            return response.json()
-        else:
-            logging.error(f"Error getting event types: {response.status_code} - {response.text}")
-            return None
-    except Exception as e:
-        logging.error(f"Error getting Calendly event types: {e}")
-        return None
+# Legacy function for backward compatibility
+def check_email_booked_specific_events(email: str) -> Tuple[bool, Optional[str]]:
+    """Legacy function - same as check_email_booked"""
+    return check_email_booked(email)
 
 if __name__ == "__main__":
-    # Test the functions
-    user_uuid = "2ae4f947-d7f5-4610-93cf-fc67ff729342"
-    token = "eyJraWQiOiIxY2UxZTEzNjE3ZGNmNzY2YjNjZWJjY2Y4ZGM1YmFmYThhNjVlNjg0MDIzZjdjMzJiZTgzNDliMjM4MDEzNWI0IiwidHlwIjoiUEFUIiwiYWxnIjoiRVMyNTYifQ.eyJpc3MiOiJodHRwczovL2F1dGguY2FsZW5kbHkuY29tIiwiaWF0IjoxNzUyNzY4MDI1LCJqdGkiOiIyY2Q4MjQ5OS0wNmI3LTRjM2QtYmI3MS01MDMxZWFkZTRiYjYiLCJ1c2VyX3V1aWQiOiIyYWU0Zjk0Ny1kN2Y1LTQ2MTAtOTNjZi1mYzY3ZmY3MjkzNDIifQ.-Ff2-NjGkvV6f9eSEbMT6qoRDIlactRzPFGa9r8ooW3AmYHZvMCxpSd4apwZodBx45HBMshq98Bt0f8tv6cVbQ"
-    email = "mjsistoxic53@gmail.com"
-
-    print("Testing Calendly integration...")
-    print(f"Checking booking for: {email}")
-    
-    result = check_email_booked(email, user_uuid, token)
-    print(f"Booking found: {result}")
-    
-    # Test cache
-    print("\nTesting cache...")
-    result2 = check_email_booked(email, user_uuid, token)
-    print(f"Cached result: {result2}")
-    
-    print("\nCache stats:")
-    stats = get_cache_stats()
-    print(f"Total entries: {stats['total_entries']}")
-    print(f"Valid entries: {stats['valid_entries']}")
-    print(f"Expired entries: {stats['expired_entries']}")
-    
-    print("\nGetting user info...")
-    user_info = calendly_get_user_info(user_uuid, token)
-    if user_info:
-        print("User info retrieved successfully")
-    
-    print("\nGetting event types...")
-    event_types = calendly_get_event_types(user_uuid, token)
-    if event_types:
-        print("Event types retrieved successfully")
+    # Test the connection
+    print("🧪 Testing Calendly Connection...")
+    if test_calendly_connection():
+        print("✅ Connection successful!")
+        
+        # Test email booking
+        test_email = "suspiciouscarson3@justzeus.com"
+        print(f"\n📧 Testing booking for: {test_email}")
+        
+        has_booked, event_type = check_email_booked(test_email)
+        if has_booked:
+            print(f"✅ Booking found! Event type: {event_type}")
+            
+            # Get detailed info
+            details = get_booking_details(test_email)
+            if details:
+                print(f"📋 Booking details:")
+                print(f"   Event: {details.get('event_name', 'Unknown')}")
+                print(f"   Type: {details.get('event_type', 'Unknown')}")
+                print(f"   Start: {details.get('start_time', 'Unknown')}")
+        else:
+            print("❌ No booking found")
+    else:
+        print("❌ Connection failed!")

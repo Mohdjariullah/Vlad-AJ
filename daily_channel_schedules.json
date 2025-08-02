@@ -1,0 +1,14 @@
+{
+  "1400162737694314497": {
+    "role_id": 1370123831603237054,
+    "days": [
+      "thursday"
+    ],
+    "start_hour": 0,
+    "end_hour": 23,
+    "timezone": "Asia/Kolkata",
+    "notifications": true,
+    "created_by": 890323443252351046,
+    "created_at": "2025-07-30T21:05:51.830240+00:00"
+  }
+}
