@@ -100,18 +100,11 @@ class EmailCollectionModal(Modal, title="Please provide your email"):
             else:
                 # User hasn't booked any of the required events
                 embed = discord.Embed(
-                    title="📅 Booking Required",
+                    title="📅 Book Your Onboarding Call Below",
                     description=(
-                        "❌ **No booking found for this email address.**\n\n"
-                        "You must book one of our calls before gaining access:\n\n"
-                        "**📅 Available Calls:**\n"
-                        "• **Mastermind Call** - For strategic planning\n"
-                        "• **Game Plan Call** - For tactical guidance\n\n"
-                        "**Please book your call first:**\n"
-                        f"👉 [**MASTERMIND CALL**]({MASTERMIND_LINK}) 👈\n"
-                        f"👉 [**GAME PLAN CALL**]({GAMEPLAN_LINK}) 👈\n\n"
-                        "After booking, return here and try again with the same email address.\n\n"
-                        "⏰ **Note:** If you don't book within 48 hours, you'll get basic access to the community, but booking a call will give you premium access."
+                        "• **Free Onboarding Call** - For strategic planning\n"
+                        f"👉 [**FREE ONBOARDING CALL**]({MASTERMIND_LINK}) 👈\n"
+                        "After booking, return here and try again with the same email address."
                     ),
                     color=discord.Color.red()
                 )
@@ -120,7 +113,6 @@ class EmailCollectionModal(Modal, title="Please provide your email"):
                     value=f"`{encrypt_email(email)}`", 
                     inline=False
                 )
-                embed.set_footer(text="Book your call first, then try again!")
                 
                 await interaction.followup.send(embed=embed, ephemeral=True)
                 

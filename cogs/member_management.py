@@ -61,12 +61,12 @@ class MemberManagement(commands.Cog):
             SecureLogger.error(f"Error saving pending users: {e}")
 
     async def check_48_hour_access(self):
-        """Check for users who should get access after 48 hours"""
+        """Check for users who should get access after 5 minutes"""
         current_time = datetime.now(timezone.utc)
         users_to_grant_access = []
         
         for user_id, join_time in self.pending_users.items():
-            if current_time - join_time >= timedelta(hours=48):
+            if current_time - join_time >= timedelta(minutes=5):
                 users_to_grant_access.append(user_id)
         
         for user_id in users_to_grant_access:
@@ -105,33 +105,33 @@ class MemberManagement(commands.Cog):
                     # Log the event
                     await self.log_member_event(
                         guild,
-                        "⏰ 48-Hour Basic Access",
-                        f"{member.mention} was granted basic access after 48 hours without booking",
+                        "⏰ 5-Minute Basic Access",
+                        f"{member.mention} was granted basic access after 5 minutes without booking",
                         member,
                         discord.Color.orange()
                     )
                     
                     # Send DM notification
-                    try:
-                        embed = discord.Embed(
-                            title="🎉 Basic Access Granted!",
-                            description=(
-                                "You've been granted basic access to the community after 48 hours!\n\n"
-                                "You now have access to the community, but we still encourage you to book your onboarding call "
-                                "to get the full experience and unlock additional benefits.\n\n"
-                                "**To get premium access:**\n"
-                                "• Book your Mastermind Call for strategic planning\n"
-                                "• Book your Game Plan Call for tactical guidance\n\n"
-                                "Enjoy your stay!"
-                            ),
-                            color=discord.Color.green()
-                        )
-                        embed.set_footer(text=f"Server: {guild.name}")
-                        await member.send(embed=embed)
-                    except Exception as e:
-                        logging.warning(f"Could not send 48-hour access DM to {member.name}: {e}")
+                    # try:
+                    #     embed = discord.Embed(
+                    #         title="🎉 Basic Access Granted!",
+                    #         description=(
+                    #             "You've been granted basic access to the community after 48 hours!\n\n"
+                    #             "You now have access to the community, but we still encourage you to book your onboarding call "
+                    #             "to get the full experience and unlock additional benefits.\n\n"
+                    #             "**To get premium access:**\n"
+                    #             "• Book your Mastermind Call for strategic planning\n"
+                    #             "• Book your Game Plan Call for tactical guidance\n\n"
+                    #             "Enjoy your stay!"
+                    #         ),
+                    #         color=discord.Color.green()
+                    #     )
+                    #     embed.set_footer(text=f"Server: {guild.name}")
+                    #     await member.send(embed=embed)
+                    # except Exception as e:
+                    #     logging.warning(f"Could not send 48-hour access DM to {member.name}: {e}")
                     
-                    SecureLogger.info(f"Granted 48-hour basic access to {member.name}")
+                    SecureLogger.info(f"Granted 5-minute basic access to {member.name}")
             
         except Exception as e:
             SecureLogger.error(f"Error granting 48-hour access to user {user_id}: {e}")
@@ -140,19 +140,19 @@ class MemberManagement(commands.Cog):
     async def on_ready(self) -> None:
         """Called when the cog is ready."""
         SecureLogger.info("MemberManagement cog is ready!")
-        # Start the 48-hour check task
+        # Start the 5-minute check task
         self.bot.loop.create_task(self.periodic_48_hour_check())
 
     async def periodic_48_hour_check(self):
-        """Periodically check for users who should get 48-hour access"""
+        """Periodically check for users who should get 5-minute access"""
         while True:
             try:
                 await self.check_48_hour_access()
-                # Check every hour
-                await asyncio.sleep(3600)  # 1 hour
+                # Check every minute
+                await asyncio.sleep(60)  # 1 minute
             except Exception as e:
-                SecureLogger.error(f"Error in periodic 48-hour check: {e}")
-                await asyncio.sleep(3600)  # Wait an hour before retrying
+                SecureLogger.error(f"Error in periodic 5-minute check: {e}")
+                await asyncio.sleep(60)  # Wait a minute before retrying
 
     @commands.Cog.listener()
     async def on_member_join(self, member: discord.Member) -> None:
@@ -213,7 +213,7 @@ class MemberManagement(commands.Cog):
                 logging.info(f"User {member.name} bypassed verification with roles: {bypass_role_names}")
                 return
             
-            # Add user to pending list for 48-hour access
+            # Add user to pending list for 5-minute access
             self.pending_users[member.id] = datetime.now(timezone.utc)
             self.save_pending_users()
             
@@ -221,7 +221,7 @@ class MemberManagement(commands.Cog):
             await self.log_member_event(
                 member.guild,
                 "👋 User Joined",
-                f"{member.mention} joined the server. Welcome DM sent with verification button. Added to 48-hour timer.",
+                f"{member.mention} joined the server. Welcome DM sent with verification button. Added to 5-minute timer.",
                 member,
                 discord.Color.blue()
             )

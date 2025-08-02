@@ -33,10 +33,10 @@ def load_pending_users():
         logging.error(f"Error loading pending users: {e}")
         return {}
 
-@app_commands.command(name="check_pending", description="Check how many users are pending for 48-hour access")
+@app_commands.command(name="check_pending", description="Check how many users are pending for 5-minute access")
 @app_commands.default_permissions(administrator=True)
 async def check_pending(interaction: discord.Interaction):
-    """Check how many users are pending for 48-hour access"""
+    """Check how many users are pending for 5-minute access"""
     if not is_authorized_guild_or_owner(interaction):
         return await interaction.response.send_message(
             "❌ You are not authorized to use this command.", ephemeral=True
@@ -62,8 +62,8 @@ async def check_pending(interaction: discord.Interaction):
         
         if not pending_users:
             embed = discord.Embed(
-                title="📋 48-Hour Pending Users",
-                description="No users are currently pending for 48-hour access.",
+                title="📋 5-Minute Pending Users",
+                description="No users are currently pending for 5-minute access.",
                 color=discord.Color.green()
             )
             await interaction.followup.send(embed=embed, ephemeral=True)
@@ -73,7 +73,7 @@ async def check_pending(interaction: discord.Interaction):
         users_with_time = []
         for user_id, join_time in pending_users.items():
             time_elapsed = current_time - join_time
-            time_remaining = timedelta(hours=48) - time_elapsed
+            time_remaining = timedelta(minutes=5) - time_elapsed
             
             if time_remaining.total_seconds() > 0:
                 hours_remaining = int(time_remaining.total_seconds() // 3600)
@@ -89,7 +89,7 @@ async def check_pending(interaction: discord.Interaction):
         
         # Create embed
         embed = discord.Embed(
-            title="📋 48-Hour Pending Users",
+            title="📋 5-Minute Pending Users",
             description=f"**Total pending users:** {len(pending_users)}",
             color=discord.Color.blue()
         )
