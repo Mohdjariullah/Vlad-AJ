@@ -95,19 +95,25 @@ class DailyChannelAccess(commands.Cog):
                 # Get current permissions for the role
                 current_overwrites = channel.overwrites_for(role)
                 
+                # Always allow viewing and reading, but control sending messages
+                if not current_overwrites.view_channel or current_overwrites.view_channel is False:
+                    # Enable viewing and reading (always)
+                    await channel.set_permissions(role, view_channel=True, read_messages=True)
+                    logging.info(f"Enabled viewing access to {channel.name} for role {role.name}")
+                
                 if is_allowed_day and is_allowed_time:
-                    # Channel should be accessible
-                    if not current_overwrites.view_channel or current_overwrites.view_channel is False:
-                        # Enable access
-                        await channel.set_permissions(role, view_channel=True, read_messages=True)
-                        logging.info(f"Enabled access to {channel.name} for role {role.name}")
+                    # Channel should be writable
+                    if current_overwrites.send_messages is False:
+                        # Enable sending messages
+                        await channel.set_permissions(role, send_messages=True)
+                        logging.info(f"Enabled sending messages in {channel.name} for role {role.name}")
                         
                         # Send notification if enabled
                         if schedule.get('notifications', False):
                             try:
                                 embed = discord.Embed(
-                                    title="📢 Channel Now Open",
-                                    description=f"The channel {channel.mention} is now accessible for {role.mention}",
+                                    title="📢 Channel Now Open for Chat",
+                                    description=f"The channel {channel.mention} is now open for chatting for {role.mention}",
                                     color=discord.Color.green(),
                                     timestamp=current_time
                                 )
@@ -123,19 +129,19 @@ class DailyChannelAccess(commands.Cog):
                                 logging.error(f"Failed to send channel open notification: {e}")
                 
                 else:
-                    # Channel should be closed
-                    if current_overwrites.view_channel is True:
-                        # Disable access
-                        await channel.set_permissions(role, view_channel=False, read_messages=False)
-                        logging.info(f"Disabled access to {channel.name} for role {role.name}")
+                    # Channel should be read-only
+                    if current_overwrites.send_messages is True:
+                        # Disable sending messages
+                        await channel.set_permissions(role, send_messages=False)
+                        logging.info(f"Disabled sending messages in {channel.name} for role {role.name}")
                         
                         # Send notification if enabled
                         if schedule.get('notifications', False):
                             try:
                                 embed = discord.Embed(
-                                    title="🔒 Channel Now Closed",
-                                    description=f"The channel {channel.mention} is now closed for {role.mention}",
-                                    color=discord.Color.red(),
+                                    title="🔒 Channel Now Read-Only",
+                                    description=f"The channel {channel.mention} is now read-only for {role.mention}",
+                                    color=discord.Color.orange(),
                                     timestamp=current_time
                                 )
                                 embed.add_field(name="Schedule", value=f"Days: {', '.join(allowed_days)}\nTime: {start_hour}:00 - {end_hour}:00 ({tz_name})", inline=False)
@@ -147,7 +153,7 @@ class DailyChannelAccess(commands.Cog):
                                     if logs_channel:
                                         await logs_channel.send(embed=embed)
                             except Exception as e:
-                                logging.error(f"Failed to send channel close notification: {e}")
+                                logging.error(f"Failed to send channel read-only notification: {e}")
             
             except Exception as e:
                 logging.error(f"Error updating permissions for channel {channel_id}: {e}")
@@ -157,70 +163,70 @@ class DailyChannelAccess(commands.Cog):
         """Wait until bot is ready before starting the task"""
         await self.bot.wait_until_ready()
 
-    async def timezone_autocomplete(self, interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
-        """Autocomplete for timezone choices"""
-        timezone_choices = [
-            app_commands.Choice(name="US East (EST/EDT)", value="America/New_York"),
-            app_commands.Choice(name="US West (PST/PDT)", value="America/Los_Angeles"),
-            app_commands.Choice(name="London (GMT/BST)", value="Europe/London"),
-            app_commands.Choice(name="Asia (IST)", value="Asia/Kolkata"),
-            app_commands.Choice(name="Tokyo (JST)", value="Asia/Tokyo"),
-            app_commands.Choice(name="UTC", value="UTC")
-        ]
-        
-        if not current:
-            return timezone_choices[:5]
-        
-        filtered = [choice for choice in timezone_choices if current.lower() in choice.name.lower()]
-        return filtered[:5]
+async def timezone_autocomplete(interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
+    """Autocomplete for timezone choices"""
+    timezone_choices = [
+        app_commands.Choice(name="US East (EST/EDT)", value="America/New_York"),
+        app_commands.Choice(name="US West (PST/PDT)", value="America/Los_Angeles"),
+        app_commands.Choice(name="London (GMT/BST)", value="Europe/London"),
+        app_commands.Choice(name="Asia (IST)", value="Asia/Kolkata"),
+        app_commands.Choice(name="Tokyo (JST)", value="Asia/Tokyo"),
+        app_commands.Choice(name="UTC", value="UTC")
+    ]
+    
+    if not current:
+        return timezone_choices[:5]
+    
+    filtered = [choice for choice in timezone_choices if current.lower() in choice.name.lower()]
+    return filtered[:5]
 
-    async def days_autocomplete(self, interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
-        """Autocomplete for days choices with multiple day options"""
-        days_choices = [
-            # Single days
-            app_commands.Choice(name="Monday", value="monday"),
-            app_commands.Choice(name="Tuesday", value="tuesday"),
-            app_commands.Choice(name="Wednesday", value="wednesday"),
-            app_commands.Choice(name="Thursday", value="thursday"),
-            app_commands.Choice(name="Friday", value="friday"),
-            app_commands.Choice(name="Saturday", value="saturday"),
-            app_commands.Choice(name="Sunday", value="sunday"),
-            
-            # Common combinations
-            app_commands.Choice(name="Weekdays (Mon-Fri)", value="monday,tuesday,wednesday,thursday,friday"),
-            app_commands.Choice(name="Weekends (Sat-Sun)", value="saturday,sunday"),
-            app_commands.Choice(name="All Days", value="monday,tuesday,wednesday,thursday,friday,saturday,sunday"),
-            
-            # Business week combinations
-            app_commands.Choice(name="Mon-Wed", value="monday,tuesday,wednesday"),
-            app_commands.Choice(name="Wed-Fri", value="wednesday,thursday,friday"),
-            app_commands.Choice(name="Mon-Thu", value="monday,tuesday,wednesday,thursday"),
-            app_commands.Choice(name="Tue-Fri", value="tuesday,wednesday,thursday,friday"),
-            
-            # Weekend combinations
-            app_commands.Choice(name="Fri-Sun", value="friday,saturday,sunday"),
-            app_commands.Choice(name="Sat-Mon", value="saturday,sunday,monday"),
-            
-            # Custom combinations
-            app_commands.Choice(name="Mon, Wed, Fri", value="monday,wednesday,friday"),
-            app_commands.Choice(name="Tue, Thu, Sat", value="tuesday,thursday,saturday"),
-            app_commands.Choice(name="Mon, Tue, Thu", value="monday,tuesday,thursday"),
-            app_commands.Choice(name="Wed, Fri, Sun", value="wednesday,friday,sunday")
-        ]
+async def days_autocomplete(interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
+    """Autocomplete for days choices with multiple day options"""
+    days_choices = [
+        # Single days
+        app_commands.Choice(name="Monday", value="monday"),
+        app_commands.Choice(name="Tuesday", value="tuesday"),
+        app_commands.Choice(name="Wednesday", value="wednesday"),
+        app_commands.Choice(name="Thursday", value="thursday"),
+        app_commands.Choice(name="Friday", value="friday"),
+        app_commands.Choice(name="Saturday", value="saturday"),
+        app_commands.Choice(name="Sunday", value="sunday"),
         
-        if not current:
-            return days_choices[:15]  # Show first 15 options when no search
+        # Common combinations
+        app_commands.Choice(name="Weekdays (Mon-Fri)", value="monday,tuesday,wednesday,thursday,friday"),
+        app_commands.Choice(name="Weekends (Sat-Sun)", value="saturday,sunday"),
+        app_commands.Choice(name="All Days", value="monday,tuesday,wednesday,thursday,friday,saturday,sunday"),
         
-        # Filter based on current input
-        filtered = [choice for choice in days_choices if current.lower() in choice.name.lower()]
+        # Business week combinations
+        app_commands.Choice(name="Mon-Wed", value="monday,tuesday,wednesday"),
+        app_commands.Choice(name="Wed-Fri", value="wednesday,thursday,friday"),
+        app_commands.Choice(name="Mon-Thu", value="monday,tuesday,wednesday,thursday"),
+        app_commands.Choice(name="Tue-Fri", value="tuesday,wednesday,thursday,friday"),
         
-        # If no matches, show some default options
-        if not filtered:
-            return days_choices[:8]
+        # Weekend combinations
+        app_commands.Choice(name="Fri-Sun", value="friday,saturday,sunday"),
+        app_commands.Choice(name="Sat-Mon", value="saturday,sunday,monday"),
         
-        return filtered[:15]  # Return up to 15 filtered results
+        # Custom combinations
+        app_commands.Choice(name="Mon, Wed, Fri", value="monday,wednesday,friday"),
+        app_commands.Choice(name="Tue, Thu, Sat", value="tuesday,thursday,saturday"),
+        app_commands.Choice(name="Mon, Tue, Thu", value="monday,tuesday,thursday"),
+        app_commands.Choice(name="Wed, Fri, Sun", value="wednesday,friday,sunday")
+    ]
+    
+    if not current:
+        return days_choices[:15]  # Show first 15 options when no search
+    
+    # Filter based on current input
+    filtered = [choice for choice in days_choices if current.lower() in choice.name.lower()]
+    
+    # If no matches, show some default options
+    if not filtered:
+        return days_choices[:8]
+    
+    return filtered[:15]  # Return up to 15 filtered results
 
-    @app_commands.command(name="daily_access_channel", description="Set up daily access for a channel with preset timezones and multiple day options")
+    @app_commands.command(name="daily_access_channel", description="Set up daily chat access for a channel - users can always see but only chat on specified days")
     @app_commands.describe(
         channel="The Discord channel to schedule",
         role="The role that will have access",
@@ -242,7 +248,7 @@ class DailyChannelAccess(commands.Cog):
         end_hour: int = 17
     ):
         """
-        Set up daily access for a channel with preset options
+        Set up daily chat access for a channel - users can always see the channel but only chat on specified days
         
         Examples:
         - /daily_access_channel #daily-bias @Members "US East" "Weekdays" 9 17
@@ -299,8 +305,8 @@ class DailyChannelAccess(commands.Cog):
         
         # Create embed response
         embed = discord.Embed(
-            title="✅ Daily Channel Access Configured",
-            description=f"Channel {channel.mention} will be accessible to {role.mention} on the specified schedule.",
+            title="✅ Daily Chat Access Configured",
+            description=f"Channel {channel.mention} will be open for chatting by {role.mention} on the specified schedule.\n\n**Note:** Users can always see the channel, but can only send messages during the scheduled times.",
             color=discord.Color.green()
         )
         embed.add_field(name="Days", value=", ".join(day_list), inline=True)
@@ -313,7 +319,7 @@ class DailyChannelAccess(commands.Cog):
         await interaction.response.send_message(embed=embed, ephemeral=True)
         
         # Log the action
-        logging.info(f"Daily channel access configured for {channel.name} by {interaction.user.name}")
+        logging.info(f"Daily chat access configured for {channel.name} by {interaction.user.name}")
 
     @app_commands.command(name="remove_daily_channel", description="Remove daily access schedule from a channel")
     @app_commands.default_permissions(administrator=True)
@@ -346,8 +352,8 @@ class DailyChannelAccess(commands.Cog):
         
         # Create embed response
         embed = discord.Embed(
-            title="🗑️ Daily Channel Access Removed",
-            description=f"Daily access schedule removed from {channel.mention}",
+            title="🗑️ Daily Chat Access Removed",
+            description=f"Daily chat access schedule removed from {channel.mention}",
             color=discord.Color.orange()
         )
         embed.add_field(name="Role", value=role_name, inline=True)
@@ -359,7 +365,7 @@ class DailyChannelAccess(commands.Cog):
         await interaction.response.send_message(embed=embed, ephemeral=True)
         
         # Log the action
-        logging.info(f"Daily channel access removed from {channel.name} by {interaction.user.name}")
+        logging.info(f"Daily chat access removed from {channel.name} by {interaction.user.name}")
 
     @app_commands.command(name="list_daily_channels", description="List all channels with daily access schedules")
     @app_commands.default_permissions(administrator=True)
@@ -376,8 +382,8 @@ class DailyChannelAccess(commands.Cog):
             return
         
         embed = discord.Embed(
-            title="📋 Daily Channel Schedules",
-            description="Channels with configured daily access schedules:",
+            title="📋 Daily Chat Schedules",
+            description="Channels with configured daily chat access schedules:",
             color=discord.Color.blue()
         )
         
@@ -401,7 +407,7 @@ class DailyChannelAccess(commands.Cog):
                 is_allowed_day = current_day in [day.lower() for day in schedule['days']]
                 is_allowed_time = schedule['start_hour'] <= current_hour <= schedule['end_hour']
                 
-                status = "🟢 Open" if (is_allowed_day and is_allowed_time) else "🔴 Closed"
+                status = "🟢 Chat Open" if (is_allowed_day and is_allowed_time) else "🔴 Read-Only"
                 
                 embed.add_field(
                     name=f"{status} {channel.name}",
@@ -409,7 +415,7 @@ class DailyChannelAccess(commands.Cog):
                     inline=False
                 )
         
-        embed.set_footer(text=f"Total schedules: {len(self.channel_schedules)}")
+        embed.set_footer(text=f"Total schedules: {len(self.channel_schedules)} | Users can always see channels, but only chat during scheduled times")
         
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
@@ -458,8 +464,8 @@ class DailyChannelAccess(commands.Cog):
         has_access = overwrites.view_channel is True
         
         embed = discord.Embed(
-            title="🧪 Daily Channel Access Test",
-            description=f"Testing access for {channel.mention}",
+            title="🧪 Daily Chat Access Test",
+            description=f"Testing chat access for {channel.mention}",
             color=discord.Color.blue()
         )
         
@@ -469,15 +475,15 @@ class DailyChannelAccess(commands.Cog):
         embed.add_field(name="Timezone", value=tz_name, inline=True)
         embed.add_field(name="Allowed Days", value=", ".join(schedule['days']), inline=True)
         embed.add_field(name="Allowed Time", value=f"{schedule['start_hour']:02d}:00 - {schedule['end_hour']:02d}:00", inline=True)
-        embed.add_field(name="Schedule Status", value="✅ Allowed" if (is_allowed_day and is_allowed_time) else "❌ Not Allowed", inline=True)
-        embed.add_field(name="Actual Access", value="✅ Has Access" if has_access else "❌ No Access", inline=True)
+        embed.add_field(name="Schedule Status", value="✅ Chat Allowed" if (is_allowed_day and is_allowed_time) else "❌ Read-Only", inline=True)
+        embed.add_field(name="Actual Chat Access", value="✅ Can Send Messages" if has_access else "❌ Read-Only", inline=True)
         
         if (is_allowed_day and is_allowed_time) != has_access:
             embed.color = discord.Color.red()
-            embed.add_field(name="⚠️ Status Mismatch", value="Schedule and actual permissions don't match!", inline=False)
+            embed.add_field(name="⚠️ Status Mismatch", value="Schedule and actual chat permissions don't match!", inline=False)
         else:
             embed.color = discord.Color.green()
-            embed.add_field(name="✅ Status Match", value="Schedule and actual permissions match!", inline=False)
+            embed.add_field(name="✅ Status Match", value="Schedule and actual chat permissions match!", inline=False)
         
         await interaction.response.send_message(embed=embed, ephemeral=True)
 

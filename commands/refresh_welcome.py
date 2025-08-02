@@ -43,20 +43,20 @@ async def refresh_welcome(interaction: discord.Interaction):
         if welcome_channel:
             channel_mention = welcome_channel.mention if isinstance(welcome_channel, discord.TextChannel) else str(welcome_channel)
             embed = discord.Embed(
-                title="👋 Welcome to the Server!",
+                title="👋 Welcome To The AJ Trading Academy!",
                 description=(
-                    "To access the server, you'll need to complete our verification process.\n\n"
-                    "**What to expect:**\n"
-                    "• Create a verification ticket\n"
-                    "• Schedule a quick onboarding call\n"
-                    "• Confirm your booking\n"
-                    "• Get verified and gain access!\n\n"
-                    "Click the button below to begin."
+                    "To maximize your free community access & the education inside, book your free onboarding call below.\n\n"
+                    "You'll speak to our senior trading success coach, who will show you how you can make the most out of your free membership and discover:\n\n"
+                    "• What you're currently doing right in your trading\n"
+                    "• What you're currently doing wrong in your trading\n"
+                    "• How can you can improve to hit your trading goals ASAP\n\n"
+                    "You will learn how you can take advantage of the free community and education to get on track to consistent market profits in just 60 minutes per day without hit-or-miss time-consuming strategies, risky trades, or losing thousands on failed challenges.\n\n"
+                    "(If you have already booked your onboarding call on the last page click the button below and you'll automatically gain access to the community)"
                 ),
-                color=0x5865F2
+                color=0xFFFFFF
             )
             embed.set_footer(text="Join our community today!")
-            embed.set_thumbnail(url="https://cdn.discordapp.com/attachments/1370122090631532655/1386775344631119963/65fe71ca-e301-40a0-b69b-de77def4f57e.jpeg")
+            embed.set_thumbnail(url="https://cdn.discordapp.com/attachments/1370122090631532655/1401222798336200834/20.38.48_73b12891.jpg")
             msg = await get_or_create_welcome_message(welcome_channel, embed, VerificationView())
             result_embed = discord.Embed(
                 title="✅ Welcome Message Refreshed",

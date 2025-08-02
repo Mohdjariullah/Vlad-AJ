@@ -5,7 +5,7 @@ import logging
 import os
 import asyncio
 from typing import Dict, List, Set, Optional, Any
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from .security_utils import (
     security_check, log_admin_action, safe_int_convert, 
     validate_input, check_rate_limit, safe_audit_log_check,
@@ -31,12 +31,128 @@ def get_env_role_id(var_name: str) -> int:
 class MemberManagement(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
+        self.pending_users: Dict[int, datetime] = {}  # user_id: join_time
+        self.load_pending_users()
         SecureLogger.info("MemberManagement cog initialized with simplified DM-based verification")
+
+    def load_pending_users(self):
+        """Load pending users from file"""
+        try:
+            if os.path.exists('pending_users.json'):
+                with open('pending_users.json', 'r') as f:
+                    data = json.load(f)
+                    for user_id_str, timestamp_str in data.items():
+                        user_id = int(user_id_str)
+                        join_time = datetime.fromisoformat(timestamp_str)
+                        self.pending_users[user_id] = join_time
+                SecureLogger.info(f"Loaded {len(self.pending_users)} pending users")
+        except Exception as e:
+            SecureLogger.error(f"Error loading pending users: {e}")
+
+    def save_pending_users(self):
+        """Save pending users to file"""
+        try:
+            data = {}
+            for user_id, join_time in self.pending_users.items():
+                data[str(user_id)] = join_time.isoformat()
+            with open('pending_users.json', 'w') as f:
+                json.dump(data, f, indent=2)
+        except Exception as e:
+            SecureLogger.error(f"Error saving pending users: {e}")
+
+    async def check_48_hour_access(self):
+        """Check for users who should get access after 48 hours"""
+        current_time = datetime.now(timezone.utc)
+        users_to_grant_access = []
+        
+        for user_id, join_time in self.pending_users.items():
+            if current_time - join_time >= timedelta(hours=48):
+                users_to_grant_access.append(user_id)
+        
+        for user_id in users_to_grant_access:
+            await self.grant_48_hour_access(user_id)
+            del self.pending_users[user_id]
+        
+        if users_to_grant_access:
+            self.save_pending_users()
+
+    async def grant_48_hour_access(self, user_id: int):
+        """Grant access to a user after 48 hours"""
+        try:
+            guild_id = int(os.getenv('GUILD_ID', 0))
+            guild = self.bot.get_guild(guild_id)
+            if not guild:
+                return
+            
+            member = guild.get_member(user_id)
+            if not member:
+                return
+            
+            # Get the Member role (basic access after 48 hours)
+            member_role_id = int(os.getenv('MEMBER_ROLE_ID', 0))
+            if member_role_id:
+                member_role = guild.get_role(member_role_id)
+                if member_role and member_role not in member.roles:
+                    await member.add_roles(member_role, reason="48-hour auto-access granted")
+                    
+                    # Remove unverified role if present
+                    unverified_role_id = int(os.getenv('UNVERIFIED_ROLE_ID', 0))
+                    if unverified_role_id:
+                        unverified_role = guild.get_role(unverified_role_id)
+                        if unverified_role and unverified_role in member.roles:
+                            await member.remove_roles(unverified_role, reason="48-hour auto-access granted")
+                    
+                    # Log the event
+                    await self.log_member_event(
+                        guild,
+                        "⏰ 48-Hour Basic Access",
+                        f"{member.mention} was granted basic access after 48 hours without booking",
+                        member,
+                        discord.Color.orange()
+                    )
+                    
+                    # Send DM notification
+                    try:
+                        embed = discord.Embed(
+                            title="🎉 Basic Access Granted!",
+                            description=(
+                                "You've been granted basic access to the community after 48 hours!\n\n"
+                                "You now have access to the community, but we still encourage you to book your onboarding call "
+                                "to get the full experience and unlock additional benefits.\n\n"
+                                "**To get premium access:**\n"
+                                "• Book your Mastermind Call for strategic planning\n"
+                                "• Book your Game Plan Call for tactical guidance\n\n"
+                                "Enjoy your stay!"
+                            ),
+                            color=discord.Color.green()
+                        )
+                        embed.set_footer(text=f"Server: {guild.name}")
+                        await member.send(embed=embed)
+                    except Exception as e:
+                        logging.warning(f"Could not send 48-hour access DM to {member.name}: {e}")
+                    
+                    SecureLogger.info(f"Granted 48-hour basic access to {member.name}")
+            
+        except Exception as e:
+            SecureLogger.error(f"Error granting 48-hour access to user {user_id}: {e}")
 
     @commands.Cog.listener()
     async def on_ready(self) -> None:
         """Called when the cog is ready."""
         SecureLogger.info("MemberManagement cog is ready!")
+        # Start the 48-hour check task
+        self.bot.loop.create_task(self.periodic_48_hour_check())
+
+    async def periodic_48_hour_check(self):
+        """Periodically check for users who should get 48-hour access"""
+        while True:
+            try:
+                await self.check_48_hour_access()
+                # Check every hour
+                await asyncio.sleep(3600)  # 1 hour
+            except Exception as e:
+                SecureLogger.error(f"Error in periodic 48-hour check: {e}")
+                await asyncio.sleep(3600)  # Wait an hour before retrying
 
     @commands.Cog.listener()
     async def on_member_join(self, member: discord.Member) -> None:
@@ -53,9 +169,9 @@ class MemberManagement(commands.Cog):
                         "Click the button below to start verifying!\n\n"
                         "We're excited to have you with us!"
                     ),
-                    color=0x5865F2
+                    color=0xF00000
                 )
-                embed.set_thumbnail(url="https://cdn.discordapp.com/attachments/1370122090631532655/1386775344631119963/65fe71ca-e301-40a0-b69b-de77def4f57e.jpeg")
+                embed.set_thumbnail(url="https://cdn.discordapp.com/attachments/1370122090631532655/1401222798336200834/20.38.48_73b12891.jpg")
                 embed.set_footer(text="Join our community today!")
                 # Try to add a button to the welcome channel if possible
                 welcome_channel_id = os.getenv('WELCOME_CHANNEL_ID')
@@ -97,11 +213,15 @@ class MemberManagement(commands.Cog):
                 logging.info(f"User {member.name} bypassed verification with roles: {bypass_role_names}")
                 return
             
+            # Add user to pending list for 48-hour access
+            self.pending_users[member.id] = datetime.now(timezone.utc)
+            self.save_pending_users()
+            
             # Log the member join
             await self.log_member_event(
                 member.guild,
                 "👋 User Joined",
-                f"{member.mention} joined the server. Welcome DM sent with verification button.",
+                f"{member.mention} joined the server. Welcome DM sent with verification button. Added to 48-hour timer.",
                 member,
                 discord.Color.blue()
             )

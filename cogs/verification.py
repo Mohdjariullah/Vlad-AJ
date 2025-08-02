@@ -110,7 +110,8 @@ class EmailCollectionModal(Modal, title="Please provide your email"):
                         "**Please book your call first:**\n"
                         f"👉 [**MASTERMIND CALL**]({MASTERMIND_LINK}) 👈\n"
                         f"👉 [**GAME PLAN CALL**]({GAMEPLAN_LINK}) 👈\n\n"
-                        "After booking, return here and try again with the same email address."
+                        "After booking, return here and try again with the same email address.\n\n"
+                        "⏰ **Note:** If you don't book within 48 hours, you'll get basic access to the community, but booking a call will give you premium access."
                     ),
                     color=discord.Color.red()
                 )
@@ -136,7 +137,7 @@ class VerificationView(View):
         self.ticket_cooldowns = {}  # user_id: timestamp
 
     @discord.ui.button(
-        label="Start Verification",
+        label="Book Your Onboarding Call",
         style=discord.ButtonStyle.green,
         custom_id="verify_button",
         emoji="🔒"
@@ -217,7 +218,7 @@ class VerificationView(View):
                         ),
                         color=discord.Color.green()
                     )
-                    embed.set_thumbnail(url="https://cdn.discordapp.com/attachments/1370122090631532655/1386775344631119963/65fe71ca-e301-40a0-b69b-de77def4f57e.jpeg")
+                    embed.set_thumbnail(url="https://cdn.discordapp.com/attachments/1370122090631532655/1401222798336200834/20.38.48_73b12891.jpg")
                     embed.set_footer(text="Your verification is complete!")
                     
                     await interaction.followup.send(embed=embed, ephemeral=True)
@@ -244,6 +245,19 @@ class VerificationView(View):
                     
                     asyncio.create_task(send_verified_dm())
                     
+            # Remove from pending users if they were in the 48-hour timer
+            try:
+                from cogs.member_management import MemberManagement
+                bot = interaction.client
+                member_cog = bot.get_cog("MemberManagement")
+                if member_cog and hasattr(member_cog, 'pending_users'):
+                    if interaction.user.id in member_cog.pending_users:
+                        del member_cog.pending_users[interaction.user.id]
+                        member_cog.save_pending_users()
+                        logging.info(f"Removed {interaction.user.name} from 48-hour timer after successful verification")
+            except Exception as e:
+                logging.warning(f"Could not remove user from pending list: {e}")
+            
             # Log the verification event
             await self.log_verification_event(
                 interaction.guild,
