@@ -60,7 +60,7 @@ class MemberManagement(commands.Cog):
         except Exception as e:
             SecureLogger.error(f"Error saving pending users: {e}")
 
-    async def check_48_hour_access(self):
+    async def check_5_hour_access(self):
         """Check for users who should get access after 5 minutes"""
         current_time = datetime.now(timezone.utc)
         users_to_grant_access = []
@@ -70,14 +70,14 @@ class MemberManagement(commands.Cog):
                 users_to_grant_access.append(user_id)
         
         for user_id in users_to_grant_access:
-            await self.grant_48_hour_access(user_id)
+            await self.grant_5_hour_access(user_id)
             del self.pending_users[user_id]
         
         if users_to_grant_access:
             self.save_pending_users()
 
-    async def grant_48_hour_access(self, user_id: int):
-        """Grant access to a user after 48 hours"""
+    async def grant_5_hour_access(self, user_id: int):
+        """Grant access to a user after 5 hours"""
         try:
             guild_id = int(os.getenv('GUILD_ID', 0))
             guild = self.bot.get_guild(guild_id)
@@ -88,19 +88,19 @@ class MemberManagement(commands.Cog):
             if not member:
                 return
             
-            # Get the Member role (basic access after 48 hours)
+            # Get the Member role (basic access after 5 hours)
             member_role_id = int(os.getenv('MEMBER_ROLE_ID', 0))
             if member_role_id:
                 member_role = guild.get_role(member_role_id)
                 if member_role and member_role not in member.roles:
-                    await member.add_roles(member_role, reason="48-hour auto-access granted")
+                    await member.add_roles(member_role, reason="5-hour auto-access granted")
                     
                     # Remove unverified role if present
                     unverified_role_id = int(os.getenv('UNVERIFIED_ROLE_ID', 0))
                     if unverified_role_id:
                         unverified_role = guild.get_role(unverified_role_id)
                         if unverified_role and unverified_role in member.roles:
-                            await member.remove_roles(unverified_role, reason="48-hour auto-access granted")
+                            await member.remove_roles(unverified_role, reason="5-hour auto-access granted")
                     
                     # Log the event
                     await self.log_member_event(
@@ -116,7 +116,7 @@ class MemberManagement(commands.Cog):
                     #     embed = discord.Embed(
                     #         title="🎉 Basic Access Granted!",
                     #         description=(
-                    #             "You've been granted basic access to the community after 48 hours!\n\n"
+                    #             "You've been granted basic access to the community after 5 hours!\n\n"
                     #             "You now have access to the community, but we still encourage you to book your onboarding call "
                     #             "to get the full experience and unlock additional benefits.\n\n"
                     #             "**To get premium access:**\n"
@@ -129,25 +129,25 @@ class MemberManagement(commands.Cog):
                     #     embed.set_footer(text=f"Server: {guild.name}")
                     #     await member.send(embed=embed)
                     # except Exception as e:
-                    #     logging.warning(f"Could not send 48-hour access DM to {member.name}: {e}")
+                    #     logging.warning(f"Could not send 5-hour access DM to {member.name}: {e}")
                     
                     SecureLogger.info(f"Granted 5-minute basic access to {member.name}")
             
         except Exception as e:
-            SecureLogger.error(f"Error granting 48-hour access to user {user_id}: {e}")
+            SecureLogger.error(f"Error granting 5-hour access to user {user_id}: {e}")
 
     @commands.Cog.listener()
     async def on_ready(self) -> None:
         """Called when the cog is ready."""
         SecureLogger.info("MemberManagement cog is ready!")
         # Start the 5-minute check task
-        self.bot.loop.create_task(self.periodic_48_hour_check())
+        self.bot.loop.create_task(self.periodic_5_hour_check())
 
-    async def periodic_48_hour_check(self):
+    async def periodic_5_hour_check(self):
         """Periodically check for users who should get 5-minute access"""
         while True:
             try:
-                await self.check_48_hour_access()
+                await self.check_5_hour_access()
                 # Check every minute
                 await asyncio.sleep(60)  # 1 minute
             except Exception as e:

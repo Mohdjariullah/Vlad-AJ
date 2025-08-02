@@ -237,7 +237,7 @@ class VerificationView(View):
                     
                     asyncio.create_task(send_verified_dm())
                     
-            # Remove from pending users if they were in the 48-hour timer
+            # Remove from pending users if they were in the 5-hour timer
             try:
                 from cogs.member_management import MemberManagement
                 bot = interaction.client
@@ -246,7 +246,7 @@ class VerificationView(View):
                     if interaction.user.id in member_cog.pending_users:
                         del member_cog.pending_users[interaction.user.id]
                         member_cog.save_pending_users()
-                        logging.info(f"Removed {interaction.user.name} from 48-hour timer after successful verification")
+                        logging.info(f"Removed {interaction.user.name} from 5-hour timer after successful verification")
             except Exception as e:
                 logging.warning(f"Could not remove user from pending list: {e}")
             
