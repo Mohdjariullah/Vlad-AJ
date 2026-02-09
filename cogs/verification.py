@@ -1,15 +1,17 @@
 import discord
 from discord.ext import commands
-from discord import app_commands
+# from discord import app_commands  # unused
 from discord.ui import View, Button, Modal, TextInput
 import os
 import logging
 import asyncio
-from datetime import datetime, timezone, timedelta
-from typing import Dict, Set
-import json
-from cogs.security_utils import safe_int_convert, security_check
-from cogs.calendly import check_email_booked_specific_events
+from datetime import datetime, timezone
+# from datetime import timedelta  # unused
+# from typing import Dict, Set  # unused
+# import json  # unused
+# from cogs.security_utils import safe_int_convert, security_check  # unused
+# Calendly booking check (commented out – re-enable to use Calendly verification)
+# from cogs.calendly import check_email_booked_specific_events
 
 def encrypt_email(email: str) -> str:
     """Encrypt email for privacy in DMs - shows first 2 and last 2 characters"""
@@ -36,26 +38,49 @@ def encrypt_email(email: str) -> str:
     
     return f"{encrypted_username}@{encrypted_domain}"
 
-UNVERIFIED_FILE = 'unverified_users.json'
+# UNVERIFIED_FILE = 'unverified_users.json'  # unused (was for legacy unverified list)
 
-# Get booking links from environment
-GAMEPLAN_LINK = os.getenv('GAMEPLAN_LINK')
-MASTERMIND_LINK = os.getenv('MASTERMIND_LINK')
+# Booking links (optional; used only if Calendly flow is re-enabled)
+# GAMEPLAN_LINK = os.getenv('GAMEPLAN_LINK')
+# MASTERMIND_LINK = os.getenv('MASTERMIND_LINK')
 
-def get_env_role_id(var_name):
-    value = os.getenv(var_name)
+
+def _get_verified_role_ids():
+    """Parse comma-separated VERIFIED_ROLE_IDS from env. Add more role IDs in .env to assign all on verify."""
+    raw = os.getenv("VERIFIED_ROLE_IDS", "").strip()
+    if not raw:
+        return []
+    ids = []
+    for part in raw.replace(" ", "").split(","):
+        part = part.strip()
+        if part and part.isdigit():
+            ids.append(int(part))
+    return ids
+
+
+def _get_verification_cooldown_seconds():
+    """Cooldown for verification button (seconds). Env VERIFICATION_BUTTON_COOLDOWN_SECONDS, default 10."""
     try:
-        return int(value) if value is not None else None
-    except Exception:
-        return None
+        raw = os.getenv("VERIFICATION_BUTTON_COOLDOWN_SECONDS", "10").strip()
+        return max(1, int(raw)) if raw else 10
+    except (ValueError, TypeError):
+        return 10
 
-def require_guild_admin(interaction: discord.Interaction) -> bool:
-    """Security check for admin commands"""
-    if not interaction.guild:
-        return False
-    if not isinstance(interaction.user, discord.Member):
-        return False
-    return interaction.user.guild_permissions.administrator
+# Unused (only referenced in commented Calendly block below)
+# def get_env_role_id(var_name):
+#     value = os.getenv(var_name)
+#     try:
+#         return int(value) if value is not None else None
+#     except Exception:
+#         return None
+
+# def require_guild_admin(interaction: discord.Interaction) -> bool:
+#     """Security check for admin commands"""
+#     if not interaction.guild:
+#         return False
+#     if not isinstance(interaction.user, discord.Member):
+#         return False
+#     return interaction.user.guild_permissions.administrator
 
 # --- Email Collection Modal ---
 class EmailCollectionModal(Modal, title="Please provide your email"):
@@ -84,42 +109,36 @@ class EmailCollectionModal(Modal, title="Please provide your email"):
         
         # Show checking message
         await interaction.response.send_message(
-            "🔍 **Checking your booking status...**\n\n"
-            f"📧 Email: `{email}`\n"
-            "⏳ Please wait while we verify your booking in our systems...",
+            "🔍 **Checking...**\n\n"
+            f"📧 Email: `{encrypt_email(email)}`\n"
+            "⏳ Please wait...",
             ephemeral=True
         )
         
         try:
-            # Check Calendly for specific event bookings (ROBUST METHOD)
-            has_booked, event_type = check_email_booked_specific_events(email)
-            
-            if has_booked and event_type:
-                # User has booked a specific event, assign the corresponding role
-                await self.verification_view.assign_role_based_on_booking(interaction, email, event_type)
-            else:
-                # User hasn't booked any of the required events
-                embed = discord.Embed(
-                    title="📅 Book Your Onboarding Call Below",
-                    description=(
-                        "• **Free Onboarding Call** - For strategic planning\n"
-                        f"👉 [**FREE ONBOARDING CALL**]({MASTERMIND_LINK}) 👈\n"
-                        "After booking, return here and try again with the same email address."
-                    ),
-                    color=discord.Color.red()
-                )
-                embed.add_field(
-                    name="📧 Email Checked", 
-                    value=f"`{encrypt_email(email)}`", 
-                    inline=False
-                )
-                
-                await interaction.followup.send(embed=embed, ephemeral=True)
-                
+            # --- Calendly booking check (commented out – uncomment to re-enable) ---
+            # has_booked, event_type = check_email_booked_specific_events(email)
+            # if has_booked and event_type:
+            #     await self.verification_view.assign_role_based_on_booking(interaction, email, event_type)
+            # else:
+            #     embed = discord.Embed(
+            #         title="📅 Book Your Onboarding Call Below",
+            #         description=(
+            #             "• **Free Onboarding Call** - For strategic planning\n"
+            #             f"👉 [**FREE ONBOARDING CALL**]({MASTERMIND_LINK}) 👈\n"
+            #             "After booking, return here and try again with the same email address."
+            #         ),
+            #         color=discord.Color.red()
+            #     )
+            #     embed.add_field(name="📧 Email Checked", value=f"`{encrypt_email(email)}`", inline=False)
+            #     await interaction.followup.send(embed=embed, ephemeral=True)
+            # --- End Calendly block ---
+            # Assign roles from env VERIFIED_ROLE_IDS (add more IDs in .env to assign all)
+            await self.verification_view.assign_roles_from_env(interaction, email)
         except Exception as e:
-            logging.error(f"Error checking Calendly booking for {email}: {e}")
+            logging.error(f"Error during verification for {email}: {e}")
             await interaction.followup.send(
-                "❌ Error checking booking status. Please try again or contact support.",
+                "❌ Error during verification. Please try again or contact support.",
                 ephemeral=True
             )
 
@@ -143,7 +162,7 @@ class VerificationView(View):
             )
         user_id = interaction.user.id
         now = time.time()
-        cooldown = 10
+        cooldown = _get_verification_cooldown_seconds()
         last_press = self.ticket_cooldowns.get(user_id, 0)
         if now - last_press < cooldown:
             return await interaction.response.send_message(
@@ -156,109 +175,81 @@ class VerificationView(View):
         modal = EmailCollectionModal(self)
         await interaction.response.send_modal(modal)
 
-    async def assign_role_based_on_booking(self, interaction: discord.Interaction, email: str, event_type: str):
-        """Assign the appropriate role based on the booking type"""
+    async def assign_roles_from_env(self, interaction: discord.Interaction, email: str):
+        """Assign all roles from env VERIFIED_ROLE_IDS (comma-separated). Add more IDs in .env to assign more roles."""
         try:
-            # Get role IDs from environment variables
-            mastermind_role_id = get_env_role_id('MASTERMIND_ROLE_ID')
-            gameplan_role_id = get_env_role_id('GAMEPLAN_ROLE_ID')
-            
-            role_to_assign = None
-            role_name = ""
-            
-            if event_type == "mastermind" and mastermind_role_id:
-                role_to_assign = interaction.guild.get_role(mastermind_role_id)
-                role_name = "Mastermind"
-            elif event_type == "gameplan" and gameplan_role_id:
-                role_to_assign = interaction.guild.get_role(gameplan_role_id)
-                role_name = "Game Plan"
-            
-            if not role_to_assign:
+            role_ids = _get_verified_role_ids()
+            if not role_ids:
                 await interaction.followup.send(
-                    "❌ Error: Role not found. Please contact an administrator.",
+                    "❌ No roles configured. Set VERIFIED_ROLE_IDS in .env (comma-separated role IDs).",
                     ephemeral=True
                 )
                 return
-
-            # Check if user already has the role
-            if role_to_assign in interaction.user.roles:
+            guild = interaction.guild
+            roles_to_add = []
+            for rid in role_ids:
+                r = guild.get_role(rid)
+                if r and r not in interaction.user.roles:
+                    roles_to_add.append(r)
+            if not roles_to_add:
                 await interaction.followup.send(
-                    f"✅ You already have the {role_name} role!",
+                    "✅ You already have all verified roles!",
                     ephemeral=True
                 )
                 return
-            
-            # Assign the role
-            await interaction.user.add_roles(role_to_assign, reason=f"Calendly booking verified - {event_type} call")
-            
-            # Remove unverified role if present
-            unverified_role_id = int(os.getenv('UNVERIFIED_ROLE_ID', 0))
-            if unverified_role_id and interaction.guild:
-                unverified_role = interaction.guild.get_role(unverified_role_id)
+            for r in roles_to_add:
+                await interaction.user.add_roles(r, reason="Verification – roles from VERIFIED_ROLE_IDS")
+            role_names = [r.name for r in roles_to_add]
+            unverified_role_id = int(os.getenv("UNVERIFIED_ROLE_ID", 0))
+            if unverified_role_id and guild:
+                unverified_role = guild.get_role(unverified_role_id)
                 if unverified_role and unverified_role in interaction.user.roles:
                     await interaction.user.remove_roles(unverified_role, reason="Verification complete")
-                    
-                    # Success embed
-                    embed = discord.Embed(
-                        title="🎉 **Verification Complete!**",
+            embed = discord.Embed(
+                title="🎉 Verification Complete!",
+                description=(
+                    "✅ Your access has been granted.\n\n"
+                    f"**📧 Email:** `{encrypt_email(email)}`\n"
+                    f"**🔑 Roles assigned:** {', '.join(role_names)}\n\n"
+                    "Welcome to the server!"
+                ),
+                color=discord.Color.green()
+            )
+            embed.set_footer(text="Verification complete!")
+            await interaction.followup.send(embed=embed, ephemeral=True)
+            async def send_verified_dm():
+                await asyncio.sleep(2)
+                try:
+                    dm_embed = discord.Embed(
+                        title="🎉 You Are Verified!",
                         description=(
-                            "✅ **Your booking has been confirmed and your access has been granted!**\n\n"
+                            "Your access has been granted.\n\n"
                             f"**📧 Email:** `{encrypt_email(email)}`\n"
-                    f"**🎯 Call Type:** {role_name} Call\n"
-                    f"**🔑 Role Assigned:** {role_to_assign.name}\n\n"
-                    "Welcome to the server! Enjoy your access."
+                            f"**🔑 Roles:** {', '.join(role_names)}\n\n"
+                            "Welcome to the server!"
                         ),
                         color=discord.Color.green()
                     )
-                    embed.set_thumbnail(url="https://cdn.discordapp.com/attachments/1370122090631532655/1401222798336200834/20.38.48_73b12891.jpg")
-                    embed.set_footer(text="Your verification is complete!")
-                    
-                    await interaction.followup.send(embed=embed, ephemeral=True)
-                    
-                    # Send DM notification
-                    async def send_verified_dm():
-                        await asyncio.sleep(2)
-                        try:
-                            dm_embed = discord.Embed(
-                                title="🎉 You Are Verified!",
-                                description=(
-                            "Your booking has been confirmed and your access has been granted!\n\n"
-                                    f"**📧 Email:** `{encrypt_email(email)}`\n"
-                            f"**🎯 Call Type:** {role_name} Call\n"
-                            f"**🔑 Role:** {role_to_assign.name}\n\n"
-                                    "Welcome to the server! Enjoy your stay."
-                                ),
-                                color=discord.Color.green()
-                            )
-                            dm_embed.set_footer(text=f"Server: {getattr(interaction.guild, 'name', 'Unknown')}")
-                            await interaction.user.send(embed=dm_embed)
-                        except Exception as e:
-                            logging.warning(f"Could not send verification DM to {interaction.user.name}: {e}")
-                    
-                    asyncio.create_task(send_verified_dm())
-                    
-            # Remove from pending users if they were in the 5-hour timer
+                    dm_embed.set_footer(text=f"Server: {getattr(guild, 'name', 'Unknown')}")
+                    await interaction.user.send(embed=dm_embed)
+                except Exception as e:
+                    logging.warning(f"Could not send verification DM to {interaction.user.name}: {e}")
+            asyncio.create_task(send_verified_dm())
             try:
                 from cogs.member_management import MemberManagement
-                bot = interaction.client
-                member_cog = bot.get_cog("MemberManagement")
-                if member_cog and hasattr(member_cog, 'pending_users'):
-                    if interaction.user.id in member_cog.pending_users:
-                        del member_cog.pending_users[interaction.user.id]
-                        member_cog.save_pending_users()
-                        logging.info(f"Removed {interaction.user.name} from 5-hour timer after successful verification")
-            except Exception as e:
-                logging.warning(f"Could not remove user from pending list: {e}")
-            
-            # Log the verification event
+                member_cog = interaction.client.get_cog("MemberManagement")
+                if member_cog and hasattr(member_cog, "pending_users") and interaction.user.id in member_cog.pending_users:
+                    del member_cog.pending_users[interaction.user.id]
+                    member_cog.save_pending_users()
+            except Exception:
+                pass
             await self.log_verification_event(
                 interaction.guild,
-                "🎫 Role Assignment (Calendly Verified)",
-                f"{interaction.user.mention} received {role_to_assign.name} role after {role_name} call verification\n📧 Email: {email}\n✅ Event Type: {event_type}",
+                "🎫 Roles Assigned",
+                f"{interaction.user.mention} received: {', '.join(role_names)}\n📧 {encrypt_email(email)}",
                 interaction.user,
                 discord.Color.green()
             )
-            
         except Exception as e:
             logging.error(f"Error in role assignment for {interaction.user.name}: {e}")
             await interaction.followup.send(
@@ -268,10 +259,27 @@ class VerificationView(View):
             await self.log_verification_event(
                 interaction.guild,
                 "❌ Role Assignment Failed",
-                f"Error during role assignment for {interaction.user.mention}: {str(e)}",
+                f"Error for {interaction.user.mention}: {str(e)}",
                 interaction.user,
                 discord.Color.red()
             )
+
+    # --- Calendly-based role assignment (commented out – use assign_roles_from_env + VERIFIED_ROLE_IDS) ---
+    # async def assign_role_based_on_booking(self, interaction: discord.Interaction, email: str, event_type: str):
+    #     """Assign the appropriate role based on the booking type (mastermind/gameplan)."""
+    #     mastermind_role_id = get_env_role_id('MASTERMIND_ROLE_ID')
+    #     gameplan_role_id = get_env_role_id('GAMEPLAN_ROLE_ID')
+    #     role_to_assign = None
+    #     role_name = ""
+    #     if event_type == "mastermind" and mastermind_role_id:
+    #         role_to_assign = interaction.guild.get_role(mastermind_role_id)
+    #         role_name = "Mastermind"
+    #     elif event_type == "gameplan" and gameplan_role_id:
+    #         role_to_assign = interaction.guild.get_role(gameplan_role_id)
+    #         role_name = "Game Plan"
+    #     if not role_to_assign: ...
+    #     await interaction.user.add_roles(role_to_assign, reason=f"Calendly booking verified - {event_type} call")
+    #     ... (rest of success embed, DM, log)
 
     async def log_verification_event(self, guild, title, description, user, color):
         """Log verification events to the logs channel"""

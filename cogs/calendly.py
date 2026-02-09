@@ -1,3 +1,8 @@
+# Calendly booking integration – COMMENTED OUT (not deleted).
+# To re-enable: 1) Uncomment this file body below. 2) In cogs/verification.py uncomment
+# the Calendly import and the "has_booked, event_type = check_email_booked_specific_events(...)" block,
+# and switch the modal to call assign_role_based_on_booking(interaction, email, event_type) when has_booked.
+#
 import requests
 import os
 import json
@@ -346,28 +351,20 @@ def check_email_booked_specific_events(email: str) -> Tuple[bool, Optional[str]]
     """Legacy function - same as check_email_booked"""
     return check_email_booked(email)
 
-if __name__ == "__main__":
-    # Test the connection
-    print("🧪 Testing Calendly Connection...")
-    if test_calendly_connection():
-        print("✅ Connection successful!")
-        
-        # Test email booking
-        test_email = "suspiciouscarson3@justzeus.com"
-        print(f"\n📧 Testing booking for: {test_email}")
-        
-        has_booked, event_type = check_email_booked(test_email)
-        if has_booked:
-            print(f"✅ Booking found! Event type: {event_type}")
-            
-            # Get detailed info
-            details = get_booking_details(test_email)
-            if details:
-                print(f"📋 Booking details:")
-                print(f"   Event: {details.get('event_name', 'Unknown')}")
-                print(f"   Type: {details.get('event_type', 'Unknown')}")
-                print(f"   Start: {details.get('start_time', 'Unknown')}")
-        else:
-            print("❌ No booking found")
-    else:
-        print("❌ Connection failed!")
+# Calendly main (commented out – re-enable when using Calendly)
+# if __name__ == "__main__":
+#     print("🧪 Testing Calendly Connection...")
+#     if test_calendly_connection():
+#         print("✅ Connection successful!")
+#         test_email = "suspiciouscarson3@justzeus.com"
+#         print(f"\n📧 Testing booking for: {test_email}")
+#         has_booked, event_type = check_email_booked(test_email)
+#         if has_booked:
+#             print(f"✅ Booking found! Event type: {event_type}")
+#             details = get_booking_details(test_email)
+#             if details:
+#                 print(f"📋 Booking details: Event: {details.get('event_name')} Type: {details.get('event_type')}")
+#         else:
+#             print("❌ No booking found")
+#     else:
+#         print("❌ Connection failed!")

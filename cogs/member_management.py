@@ -28,12 +28,23 @@ def get_env_role_id(var_name: str) -> int:
         raise ValueError(f"Environment variable '{var_name}' is not a valid int")
     return val
 
+
+def _parse_role_id(env_var: str, default: int = 0) -> int:
+    """Parse role ID from env: strip whitespace, empty/invalid -> default. Safe for optional env vars."""
+    raw = os.getenv(env_var)
+    if raw is None or not str(raw).strip():
+        return default
+    try:
+        return int(str(raw).strip())
+    except ValueError:
+        return default
+
 class MemberManagement(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self.pending_users: Dict[int, datetime] = {}  # user_id: join_time
         self.load_pending_users()
-        SecureLogger.info("MemberManagement cog initialized with simplified DM-based verification")
+        SecureLogger.info("MemberManagement cog initialized (Vito: 1-hour auto-access, no verification)")
 
     def load_pending_users(self):
         """Load pending users from file"""
@@ -60,24 +71,24 @@ class MemberManagement(commands.Cog):
         except Exception as e:
             SecureLogger.error(f"Error saving pending users: {e}")
 
-    async def check_5_hour_access(self):
-        """Check for users who should get access after 5 minutes"""
+    async def check_1_hour_access(self):
+        """Check for users who should get access after 1 hour"""
         current_time = datetime.now(timezone.utc)
         users_to_grant_access = []
         
         for user_id, join_time in self.pending_users.items():
-            if current_time - join_time >= timedelta(minutes=5):
+            if current_time - join_time >= timedelta(minutes=60):
                 users_to_grant_access.append(user_id)
         
         for user_id in users_to_grant_access:
-            await self.grant_5_hour_access(user_id)
+            await self.grant_1_hour_access(user_id)
             del self.pending_users[user_id]
         
         if users_to_grant_access:
             self.save_pending_users()
 
-    async def grant_5_hour_access(self, user_id: int):
-        """Grant access to a user after 5 hours"""
+    async def grant_1_hour_access(self, user_id: int):
+        """Grant free member access to a user after 1 hour"""
         try:
             guild_id = int(os.getenv('GUILD_ID', 0))
             guild = self.bot.get_guild(guild_id)
@@ -88,101 +99,107 @@ class MemberManagement(commands.Cog):
             if not member:
                 return
             
-            # Get the Member role (basic access after 5 hours)
+            # Free members role (MEMBER_ROLE_ID)
             member_role_id = int(os.getenv('MEMBER_ROLE_ID', 0))
             if member_role_id:
                 member_role = guild.get_role(member_role_id)
                 if member_role and member_role not in member.roles:
-                    await member.add_roles(member_role, reason="5-hour auto-access granted")
+                    await member.add_roles(member_role, reason="1-hour auto-access granted")
                     
-                    # Remove unverified role if present
                     unverified_role_id = int(os.getenv('UNVERIFIED_ROLE_ID', 0))
                     if unverified_role_id:
                         unverified_role = guild.get_role(unverified_role_id)
                         if unverified_role and unverified_role in member.roles:
-                            await member.remove_roles(unverified_role, reason="5-hour auto-access granted")
+                            await member.remove_roles(unverified_role, reason="1-hour auto-access granted")
                     
-                    # Log the event
                     await self.log_member_event(
                         guild,
-                        "⏰ 5-Minute Basic Access",
-                        f"{member.mention} was granted basic access after 5 minutes without booking",
+                        "⏰ 1-Hour Free Access",
+                        f"{member.mention} was granted free member access after 1 hour",
                         member,
                         discord.Color.orange()
                     )
-                    
-                    # Send DM notification
-                    # try:
-                    #     embed = discord.Embed(
-                    #         title="🎉 Basic Access Granted!",
-                    #         description=(
-                    #             "You've been granted basic access to the community after 5 hours!\n\n"
-                    #             "You now have access to the community, but we still encourage you to book your onboarding call "
-                    #             "to get the full experience and unlock additional benefits.\n\n"
-                    #             "**To get premium access:**\n"
-                    #             "• Book your Mastermind Call for strategic planning\n"
-                    #             "• Book your Game Plan Call for tactical guidance\n\n"
-                    #             "Enjoy your stay!"
-                    #         ),
-                    #         color=discord.Color.green()
-                    #     )
-                    #     embed.set_footer(text=f"Server: {guild.name}")
-                    #     await member.send(embed=embed)
-                    # except Exception as e:
-                    #     logging.warning(f"Could not send 5-hour access DM to {member.name}: {e}")
-                    
-                    SecureLogger.info(f"Granted 5-minute basic access to {member.name}")
+                    SecureLogger.info(f"Granted 1-hour free access to {member.name}")
             
         except Exception as e:
-            SecureLogger.error(f"Error granting 5-hour access to user {user_id}: {e}")
+            SecureLogger.error(f"Error granting 1-hour access to user {user_id}: {e}")
 
     @commands.Cog.listener()
     async def on_ready(self) -> None:
         """Called when the cog is ready."""
         SecureLogger.info("MemberManagement cog is ready!")
-        # Start the 5-minute check task
-        self.bot.loop.create_task(self.periodic_5_hour_check())
+        # Start the 1-hour check task
+        self.bot.loop.create_task(self.periodic_1_hour_check())
 
-    async def periodic_5_hour_check(self):
-        """Periodically check for users who should get 5-minute access"""
+    async def periodic_1_hour_check(self):
+        """Periodically check for users who should get 1-hour free access"""
         while True:
             try:
-                await self.check_5_hour_access()
-                # Check every minute
-                await asyncio.sleep(60)  # 1 minute
+                await self.check_1_hour_access()
+                await asyncio.sleep(60)  # Check every minute
             except Exception as e:
-                SecureLogger.error(f"Error in periodic 5-minute check: {e}")
-                await asyncio.sleep(60)  # Wait a minute before retrying
+                SecureLogger.error(f"Error in periodic 1-hour check: {e}")
+                await asyncio.sleep(60)
 
     @commands.Cog.listener()
     async def on_member_join(self, member: discord.Member) -> None:
-        """Handle new member joins - Send welcome DM with verification button."""
+        """Handle new member joins: add unverified role first, then welcome DM with Go to Server button (no booking link in DM)."""
         try:
             SecureLogger.info(f"Member {member.name} joined server {member.guild.name}")
-            
-            # Send welcome DM with verification button
+
+            # Ensure we have a full member object (avoids cache issues)
+            try:
+                member = await member.fetch()
+            except Exception:
+                pass  # use existing member if fetch fails
+
+            unverified_role_id = _parse_role_id("UNVERIFIED_ROLE_ID", 0)
+            if not unverified_role_id:
+                logging.warning("UNVERIFIED_ROLE_ID is not set or invalid in .env — new members will not get the unverified role")
+            else:
+                unverified_role = member.guild.get_role(unverified_role_id)
+                if not unverified_role:
+                    logging.warning(
+                        "Unverified role not found in guild (id=%s). Check UNVERIFIED_ROLE_ID in .env and that the role exists.",
+                        unverified_role_id,
+                    )
+                elif unverified_role in member.roles:
+                    pass  # already has it
+                else:
+                    try:
+                        await member.add_roles(unverified_role, reason="User joined, pending verification")
+                        logging.info("Added Unverified role to %s (id=%s)", member.name, member.id)
+                    except discord.Forbidden:
+                        logging.warning(
+                            "Cannot add Unverified role to %s: bot lacks permission or bot role is below Unverified in Server Settings → Roles. Move the bot role above Unverified.",
+                            member.name,
+                        )
+                    except Exception as e:
+                        logging.warning("Could not add Unverified role to %s: %s", member.name, e)
+
             try:
                 embed = discord.Embed(
-                    title="👋 Welcome to the Server!",
+                    title="👋 Welcome to Vito",
                     description=(
-                        "To access your subscription and the community, please complete the verification process.\n\n"
-                        "Click the button below to start verifying!\n\n"
-                        "We're excited to have you with us!"
+                        "You made it this far.\n"
+                        "Access isn't automatic and that's on purpose.\n\n"
+                        "This server is locked until you verify.\n"
+                        "One step. Thats it\n\n"
+                        "Hit verify.\n\n"
+                        "Welcome to Vito."
                     ),
                     color=0xF00000
                 )
-                embed.set_thumbnail(url="https://cdn.discordapp.com/attachments/1370122090631532655/1401222798336200834/20.38.48_73b12891.jpg")
-                embed.set_footer(text="Join our community today!")
-                # Try to add a button to the welcome channel if possible
-                welcome_channel_id = os.getenv('WELCOME_CHANNEL_ID')
+                embed.set_footer(text="Welcome to Vito")
+                welcome_channel_id = os.getenv("WELCOME_CHANNEL_ID")
                 if welcome_channel_id:
                     welcome_channel = member.guild.get_channel(int(welcome_channel_id))
                     if welcome_channel:
                         view = discord.ui.View()
                         view.add_item(discord.ui.Button(
-                            label="Go to Verification",
+                            label="Go to Server",
                             style=discord.ButtonStyle.link,
-                            url=welcome_channel.jump_url
+                            url=welcome_channel.jump_url,
                         ))
                         await member.send(embed=embed, view=view)
                     else:
@@ -191,37 +208,26 @@ class MemberManagement(commands.Cog):
                     await member.send(embed=embed)
             except Exception as e:
                 logging.warning(f"Could not send welcome DM to {member.name}: {e}")
-            
-            # Add unverified role if configured
-            unverified_role = member.guild.get_role(UNVERIFIED_ROLE_ID)
-            if unverified_role and unverified_role not in member.roles:
-                try:
-                    await member.add_roles(unverified_role, reason="User joined, pending verification")
-                except Exception as e:
-                    logging.warning(f"Could not add Unverified role to {member.name}: {e}")
-            
-            # Check for bypass roles
+
             if bypass_manager.has_bypass_role(member):
                 bypass_role_names = bypass_manager.get_bypass_role_names(member.guild)
                 await self.log_member_event(
                     member.guild,
-                    "🎯 Verification Bypassed",
-                    f"{member.mention} joined with bypass roles: {', '.join(bypass_role_names)} - no verification required",
+                    "🎯 Bypass",
+                    f"{member.mention} joined with bypass roles: {', '.join(bypass_role_names)}",
                     member,
                     discord.Color.gold()
                 )
-                logging.info(f"User {member.name} bypassed verification with roles: {bypass_role_names}")
+                logging.info(f"User {member.name} has bypass roles: {bypass_role_names}")
                 return
             
-            # Add user to pending list for 5-minute access
             self.pending_users[member.id] = datetime.now(timezone.utc)
             self.save_pending_users()
             
-            # Log the member join
             await self.log_member_event(
                 member.guild,
                 "👋 User Joined",
-                f"{member.mention} joined the server. Welcome DM sent with verification button. Added to 5-minute timer.",
+                f"{member.mention} joined. Welcome DM sent. Added to 1-hour timer for free access.",
                 member,
                 discord.Color.blue()
             )

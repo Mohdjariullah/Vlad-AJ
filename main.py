@@ -136,10 +136,10 @@ class AIdapticsWhopGatekeeper(commands.Bot):
                 status=discord.Status.dnd,
                 activity=discord.Activity(
                     type=discord.ActivityType.watching,
-                    name="Gates of Server"
+                    name="Vito"
                 )
             )
-            print("✅ Status set: DND - Watching Gates of Server")
+            print("✅ Status set: DND - Watching Vito")
         except Exception as e:
             print(f"❌ Failed to set status: {e}")
         
@@ -228,9 +228,9 @@ async def debug(interaction):
         color=discord.Color.blue()
     )
     
-    # Check cogs
+    # Check cogs (Verification disabled for Vito)
     cogs_status = []
-    expected_cogs = ['Verification', 'MemberManagement', 'Welcome']
+    expected_cogs = ['MemberManagement', 'Welcome']
     for cog_name in expected_cogs:
         cog = bot.get_cog(cog_name)
         status = "✅ Loaded" if cog else "❌ Not loaded"
@@ -267,7 +267,7 @@ async def debug(interaction):
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
 if __name__ == "__main__":
-    print("🚀 Starting AIdaptics Whop Gatekeeper...")
+    print("🚀 Starting Vito's Bot...")
     print("=" * 60)
     
     token = os.getenv('TOKEN')

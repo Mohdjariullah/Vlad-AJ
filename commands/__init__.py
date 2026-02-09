@@ -10,7 +10,6 @@ from .restore_permissions import setup as setup_restore_permissions
 from .refresh_welcome import setup as setup_refresh_welcome
 from .userinfo import setup as setup_userinfo
 from .debug_logs import setup as setup_debug_logs
-from .daily_channel_access import setup as setup_daily_channel_access
 from .check_pending import setup as setup_check_pending
 
 async def setup(bot: commands.Bot) -> None:
@@ -33,7 +32,5 @@ async def setup(bot: commands.Bot) -> None:
     logger.debug(msg.format("userinfo"))
     await setup_debug_logs(bot)
     logger.debug(msg.format("debug_logs"))
-    await setup_daily_channel_access(bot)
-    logger.debug(msg.format("daily_channel_access"))
     await setup_check_pending(bot)
     logger.debug(msg.format("check_pending"))
