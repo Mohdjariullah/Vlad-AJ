@@ -1,7 +1,9 @@
 """
 Welcome cog for Vito: welcome message + Start Verification button.
-Creates a private channel per user (only they + staff see it). Auto-closes after 1hr:
-if user has any paid role (from PAID_ROLE_IDS in env) they're verified; else grant free member role.
+Start Verification shows an ephemeral message only (no tickets):
+- If user has a paid role (PAID_ROLE_IDS) or member role → "You're already verified."
+- Else → "You'll get free member access automatically within 1 hour of joining."
+Member role is granted by member_management cog after 1hr for new joiners.
 """
 import asyncio
 import logging
@@ -141,133 +143,60 @@ class StartVerificationView(discord.ui.View):
         cooldown = _cooldown_seconds()
         if now - self._cooldowns.get(user_id, 0) < cooldown:
             await interaction.response.send_message(
-                f"Please wait {int(cooldown - (now - self._cooldowns[user_id]))}s before opening another ticket.",
+                f"Please wait {int(cooldown - (now - self._cooldowns[user_id]))}s before trying again.",
                 ephemeral=True,
             )
             return
         self._cooldowns[user_id] = now
 
-        category_id = os.getenv("VERIFICATION_TICKETS_CATEGORY_ID")
-        if not category_id:
-            await interaction.response.send_message(
-                "Verification tickets are not configured. Please contact an admin.",
-                ephemeral=True,
-            )
-            return
+        member = interaction.user
+        guild = interaction.guild
+        paid_role_ids = _get_paid_role_ids()
+        member_role_id = int(os.getenv("MEMBER_ROLE_ID", 0))
 
-        category = interaction.guild.get_channel(int(category_id))
-        if not category or not isinstance(category, discord.CategoryChannel):
+        has_paid = bool(paid_role_ids) and any(r.id in paid_role_ids for r in member.roles)
+        has_member = member_role_id and any(r.id == member_role_id for r in member.roles)
+
+        if has_paid or has_member:
             await interaction.response.send_message(
-                "Verification ticket category not found. Please contact an admin.",
+                "✅ **You're already verified.** You have access to the server.",
                 ephemeral=True,
             )
             return
 
         await interaction.response.defer(ephemeral=True)
-
         booking_link = os.getenv("CALL_BOOKING_LINK", DEFAULT_CALL_BOOKING_LINK)
-        channel_name = f"verify-{_sanitize_channel_name(interaction.user.display_name)}"
-        if len(channel_name) > 100:
-            channel_name = channel_name[:100]
-
-        # Private channel: only this user + bot (+ optional staff) can see
-        overwrites = {
-            interaction.guild.default_role: discord.PermissionOverwrite(view_channel=False),
-            interaction.user: discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True),
-            interaction.guild.me: discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True),
-        }
-        staff_role_id = os.getenv("TICKET_STAFF_ROLE_ID")
-        if staff_role_id:
-            staff_role = interaction.guild.get_role(int(staff_role_id))
-            if staff_role:
-                overwrites[staff_role] = discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True)
-
+        dm_sent = False
         try:
-            ticket_channel = await interaction.guild.create_text_channel(
-                name=channel_name,
-                category=category,
-                overwrites=overwrites,
-                reason=f"Verification ticket for {interaction.user}",
-            )
-        except discord.Forbidden:
-            await interaction.followup.send(
-                "I don't have permission to create ticket channels. Please contact an admin.",
-                ephemeral=True,
-            )
-            return
-        except Exception as e:
-            logging.exception("Create ticket channel failed")
-            await interaction.followup.send(
-                "Something went wrong creating your ticket. Please try again or contact an admin.",
-                ephemeral=True,
-            )
-            return
-
-        created_at = datetime.now(timezone.utc).isoformat()
-        tickets = _load_tickets()
-        tickets[str(user_id)] = {"channel_id": ticket_channel.id, "created_at": created_at}
-        _save_tickets(tickets)
-
-        # Remove from pending_users so member_management doesn't also grant member at 1hr (we handle it in ticket close)
-        pending = _load_pending_users()
-        pending.pop(str(user_id), None)
-        _save_pending_users(pending)
-
-        # In-channel: booking CTA only. No auto-verify; member role granted after timeout only for users without paid roles.
-        # Never say "we give access after 1hr" – paid members already have access; we don't verify them.
-        close_secs = _ticket_auto_close_seconds()
-        if close_secs < 60:
-            close_text = f"{close_secs} seconds"
-        elif close_secs < 3600:
-            close_text = f"{close_secs // 60} minutes"
-        else:
-            hrs = close_secs // 3600
-            close_text = "1 hour" if hrs == 1 else f"{hrs} hours"
-        embed = discord.Embed(
-            title="Verification ticket",
-            description=(
-                f"{interaction.user.mention}, your **private** verification ticket is open here.\n\n"
-                "**Next step:** Book your onboarding call (button below) if you want to get the most out of the server.\n\n"
-                f"This channel auto-closes in {close_text}."
-            ),
-            color=discord.Color.blue(),
-        )
-        embed.set_footer(text=f"User ID: {interaction.user.id}")
-        view = _cta_view(booking_link)
-        await ticket_channel.send(
-            content=interaction.user.mention,
-            embed=embed,
-            view=view,
-        )
-
-        # DM: embed + button linking to ticket channel (no booking link).
-        try:
-            embed_dm = discord.Embed(
-                title="⚠️ Action Required",
+            dm_embed = discord.Embed(
+                title="📅 Book your onboarding call",
                 description=(
-                    "Your verification ticket is live.\n\n"
-                    "Go to your ticket channel (button below) to confirm your identity and unlock the server.\n\n"
-                    "No verification, no access.\n"
-                    "Simple.\n\n"
-                    "Finish it and step inside."
+                    "Book your call using the link below to get the most out of the server.\n\n"
+                    f"👉 [**Book your onboarding call**]({booking_link})"
                 ),
-                color=discord.Color.orange(),
+                color=discord.Color.blue(),
             )
-            view_dm = discord.ui.View()
-            view_dm.add_item(discord.ui.Button(
-                label="Go to ticket",
-                style=discord.ButtonStyle.link,
-                url=ticket_channel.jump_url,
-            ))
-            await interaction.user.send(embed=embed_dm, view=view_dm)
+            dm_embed.set_footer(text="Vito")
+            await member.send(embed=dm_embed)
+            dm_sent = True
         except discord.Forbidden:
             pass
+        except Exception as e:
+            logging.warning("Could not send booking link DM to %s: %s", member.name, e)
 
-        await interaction.followup.send(
-            f"Your private verification ticket was created: {ticket_channel.mention}. Go there to continue.",
-            ephemeral=True,
-        )
-        logging.info("Verification ticket channel created for %s: %s", interaction.user, ticket_channel.id)
+        if dm_sent:
+            await interaction.followup.send(
+                "**The booking link has been sent to your DMs.**\n\n"
+                "Please book your call to get access. ",
+                ephemeral=True,
+            )
+        else:
+            await interaction.followup.send(
+                "I couldn't send you a DM. Please allow DMs from this server, or book your call here: "
+                f"{booking_link}\n\n"
+                "Please book your call to get access. ",
+                ephemeral=True,
+            )
 
 
 def get_start_verification_view() -> discord.ui.View:
@@ -305,19 +234,16 @@ async def get_or_create_welcome_message(
     return msg
 
 
-WELCOME_EMBED_DESCRIPTION = """To access the server you'll need to complete our verification process.
+WELCOME_EMBED_DESCRIPTION = """To access the server you'll need to be verified.
 
-What to expect:
-- Create a verification ticket
-- Schedule a quick onboarding call so you maximize value from the community and answer any trading questions you may have
-- Confirm your booking
-- Get verified and gain access to your free resources
+New members get **free member access** automatically within 1 hour of joining.
+If you already have a paid role or member role, you're all set.
 
-Click "Start Verification" below to begin"""
+Click **Start Verification** below to check your status."""
 
 
 class Welcome(commands.Cog):
-    """Welcome channel + private ticket channels; auto-close after 1hr with member fallback."""
+    """Welcome channel + Start Verification (ephemeral status only). Legacy ticket auto-close loop still runs for old tickets."""
 
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
