@@ -15,6 +15,33 @@ from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
 import discord
+
+
+async def _log_start_verification(guild: discord.Guild, member: discord.Member, status: str, dm_sent: bool | None = None) -> None:
+    """Send a log embed when someone presses Start Verification."""
+    logs_channel_id = os.getenv("LOGS_CHANNEL_ID")
+    if not logs_channel_id:
+        return
+    channel = guild.get_channel(int(logs_channel_id))
+    if not channel or not isinstance(channel, discord.TextChannel):
+        return
+    embed = discord.Embed(
+        title="🎫 Start Verification",
+        description=f"{member.mention} pressed **Start Verification**.",
+        color=discord.Color.blue(),
+        timestamp=datetime.now(timezone.utc),
+    )
+    embed.set_thumbnail(url=member.display_avatar.url)
+    embed.add_field(name="User", value=f"{member.mention}\n({member.name})", inline=True)
+    embed.add_field(name="User ID", value=str(member.id), inline=True)
+    embed.add_field(name="Status", value=status, inline=False)
+    if dm_sent is not None:
+        embed.add_field(name="Booking link DM", value="✅ Sent" if dm_sent else "❌ Not sent", inline=True)
+    embed.set_footer(text=f"Guild: {guild.name}")
+    try:
+        await channel.send(embed=embed)
+    except Exception as e:
+        logging.warning("Failed to send Start Verification log: %s", e)
 from discord.ext import commands
 
 # Vito branding - overridable via env
@@ -162,6 +189,7 @@ class StartVerificationView(discord.ui.View):
                 "✅ **You're already verified.** You have access to the server.",
                 ephemeral=True,
             )
+            await _log_start_verification(guild, member, "Already verified")
             return
 
         await interaction.response.defer(ephemeral=True)
@@ -197,6 +225,7 @@ class StartVerificationView(discord.ui.View):
                 "Please book your call to get access. ",
                 ephemeral=True,
             )
+        await _log_start_verification(guild, member, "Not verified – booking link / 1hr access", dm_sent=dm_sent)
 
 
 def get_start_verification_view() -> discord.ui.View:

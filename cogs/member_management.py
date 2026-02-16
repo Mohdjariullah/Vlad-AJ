@@ -39,11 +39,36 @@ def _parse_role_id(env_var: str, default: int = 0) -> int:
     except ValueError:
         return default
 
+STORED_ROLES_FILE = "stored_roles_on_join.json"
+
+
+def _load_stored_roles() -> Dict[str, List[int]]:
+    """Roles we stripped on join (e.g. Whop free member role); restore after 1hr."""
+    try:
+        if os.path.exists(STORED_ROLES_FILE):
+            with open(STORED_ROLES_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                return {k: v if isinstance(v, list) else [v] for k, v in data.items()}
+    except Exception as e:
+        SecureLogger.error(f"Error loading stored roles: {e}")
+    return {}
+
+
+def _save_stored_roles(data: Dict[str, List[int]]) -> None:
+    try:
+        with open(STORED_ROLES_FILE, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+    except Exception as e:
+        SecureLogger.error(f"Error saving stored roles: {e}")
+
+
 class MemberManagement(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self.pending_users: Dict[int, datetime] = {}  # user_id: join_time
+        self.stored_roles: Dict[str, List[int]] = {}  # user_id -> role ids we stripped on join
         self.load_pending_users()
+        self.stored_roles = _load_stored_roles()
         SecureLogger.info("MemberManagement cog initialized (Vito: 1-hour auto-access, no verification)")
 
     def load_pending_users(self):
@@ -88,39 +113,57 @@ class MemberManagement(commands.Cog):
             self.save_pending_users()
 
     async def grant_1_hour_access(self, user_id: int):
-        """Grant free member access to a user after 1 hour"""
+        """After 1hr: restore roles we stripped on join (e.g. Whop member role), or grant MEMBER_ROLE_ID; remove unverified."""
         try:
             guild_id = int(os.getenv('GUILD_ID', 0))
             guild = self.bot.get_guild(guild_id)
             if not guild:
                 return
-            
             member = guild.get_member(user_id)
             if not member:
                 return
-            
-            # Free members role (MEMBER_ROLE_ID)
-            member_role_id = int(os.getenv('MEMBER_ROLE_ID', 0))
-            if member_role_id:
-                member_role = guild.get_role(member_role_id)
-                if member_role and member_role not in member.roles:
-                    await member.add_roles(member_role, reason="1-hour auto-access granted")
-                    
-                    unverified_role_id = int(os.getenv('UNVERIFIED_ROLE_ID', 0))
-                    if unverified_role_id:
-                        unverified_role = guild.get_role(unverified_role_id)
-                        if unverified_role and unverified_role in member.roles:
-                            await member.remove_roles(unverified_role, reason="1-hour auto-access granted")
-                    
-                    await self.log_member_event(
-                        guild,
-                        "⏰ 1-Hour Free Access",
-                        f"{member.mention} was granted free member access after 1 hour",
-                        member,
-                        discord.Color.orange()
-                    )
-                    SecureLogger.info(f"Granted 1-hour free access to {member.name}")
-            
+
+            # Restore roles we stripped when they joined (e.g. Whop free member role)
+            role_ids_to_add = list(self.stored_roles.get(str(user_id), []))
+            if not role_ids_to_add:
+                member_role_id = _parse_role_id("MEMBER_ROLE_ID", 0)
+                if member_role_id:
+                    role_ids_to_add = [member_role_id]
+
+            added_any = False
+            for role_id in role_ids_to_add:
+                role = guild.get_role(role_id)
+                if role and role not in member.roles:
+                    try:
+                        await member.add_roles(role, reason="1-hour auto-access: restore role")
+                        added_any = True
+                    except discord.Forbidden:
+                        logging.warning("Could not restore role %s to %s", role_id, member.name)
+                    except Exception as e:
+                        logging.warning("Error restoring role to %s: %s", member.name, e)
+
+            unverified_role_id = _parse_role_id("UNVERIFIED_ROLE_ID", 0)
+            if unverified_role_id:
+                unverified_role = guild.get_role(unverified_role_id)
+                if unverified_role and unverified_role in member.roles:
+                    try:
+                        await member.remove_roles(unverified_role, reason="1-hour auto-access granted")
+                    except Exception as e:
+                        logging.warning("Could not remove unverified from %s: %s", member.name, e)
+
+            if str(user_id) in self.stored_roles:
+                del self.stored_roles[str(user_id)]
+                _save_stored_roles(self.stored_roles)
+
+            if added_any or role_ids_to_add:
+                await self.log_member_event(
+                    guild,
+                    "⏰ 1-Hour Free Access",
+                    f"{member.mention} was granted free member access after 1 hour",
+                    member,
+                    discord.Color.orange()
+                )
+                SecureLogger.info(f"Granted 1-hour free access to {member.name} (restored/granted roles)")
         except Exception as e:
             SecureLogger.error(f"Error granting 1-hour access to user {user_id}: {e}")
 
@@ -153,6 +196,9 @@ class MemberManagement(commands.Cog):
             except Exception:
                 pass  # use existing member if fetch fails
 
+            # Capture roles at join (before we strip any) for the join log (exclude @everyone)
+            roles_at_join = [r for r in member.roles if r != member.guild.default_role]
+
             unverified_role_id = _parse_role_id("UNVERIFIED_ROLE_ID", 0)
             if not unverified_role_id:
                 logging.warning("UNVERIFIED_ROLE_ID is not set or invalid in .env — new members will not get the unverified role")
@@ -176,6 +222,45 @@ class MemberManagement(commands.Cog):
                         )
                     except Exception as e:
                         logging.warning("Could not add Unverified role to %s: %s", member.name, e)
+
+            # Strip member/free role if Whop (or another bot) added it on join; store it and restore after 1hr
+            # Run immediately and again after short delay (in case Whop adds role right after join)
+            async def strip_member_role_if_present(m: discord.Member) -> None:
+                if bypass_manager.has_bypass_role(m):
+                    return
+                member_role_id = _parse_role_id("MEMBER_ROLE_ID", 0)
+                if not member_role_id:
+                    return
+                member_role = m.guild.get_role(member_role_id)
+                if not member_role or member_role not in m.roles:
+                    return
+                try:
+                    await m.remove_roles(member_role, reason="Unverified: strip until 1hr; will restore")
+                    self.stored_roles[str(m.id)] = self.stored_roles.get(str(m.id), [])
+                    if member_role_id not in self.stored_roles[str(m.id)]:
+                        self.stored_roles[str(m.id)].append(member_role_id)
+                    _save_stored_roles(self.stored_roles)
+                    logging.info("Stripped member role from %s (id=%s); will restore after 1hr", m.name, m.id)
+                except discord.Forbidden:
+                    logging.warning(
+                        "Cannot remove member role from %s: bot role may be below Member. Move bot role above Member.",
+                        m.name,
+                    )
+                except Exception as e:
+                    logging.warning("Could not strip member role from %s: %s", m.name, e)
+
+            if not bypass_manager.has_bypass_role(member):
+                await strip_member_role_if_present(member)
+                # If Whop re-adds the role, strip again (run at 5s, 10s, 15s)
+                async def delayed_strip_loop() -> None:
+                    for delay in (5, 10, 15):
+                        await asyncio.sleep(delay)
+                        try:
+                            m = await member.guild.fetch_member(member.id)
+                            await strip_member_role_if_present(m)
+                        except Exception:
+                            pass
+                self.bot.loop.create_task(delayed_strip_loop())
 
             try:
                 embed = discord.Embed(
@@ -229,7 +314,8 @@ class MemberManagement(commands.Cog):
                 "👋 User Joined",
                 f"{member.mention} joined. Welcome DM sent. Added to 1-hour timer for free access.",
                 member,
-                discord.Color.blue()
+                discord.Color.blue(),
+                roles=roles_at_join,
             )
             
         except Exception as e:
