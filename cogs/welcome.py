@@ -265,10 +265,9 @@ async def get_or_create_welcome_message(
 
 WELCOME_EMBED_DESCRIPTION = """To access the server you'll need to be verified.
 
-New members get **free member access** automatically within 1 hour of joining.
-If you already have a paid role or member role, you're all set.
+Book in your onboarding call to verify you’re human and to get a tour + advice so you can get profitable asap!
 
-Click **Start Verification** below to check your status."""
+Click Start Verification below to check your status."""
 
 
 class Welcome(commands.Cog):
